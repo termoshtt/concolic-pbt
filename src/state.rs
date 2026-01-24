@@ -1,10 +1,6 @@
-use std::collections::HashMap;
 use std::fmt;
 
-use crate::{BoolExpr, Expr};
-
-/// Environment mapping variable names to concrete values
-pub type Env = HashMap<String, i64>;
+use crate::{BoolExpr, Env, Expr};
 
 /// State for concolic execution
 #[derive(Debug, Clone)]
@@ -53,35 +49,9 @@ impl ConcolicState {
         }
     }
 
-    /// Evaluate without recording constraints (for display purposes)
-    fn eval_pure(&self, expr: &Expr) -> i64 {
-        match expr {
-            Expr::Lit(n) => *n,
-            Expr::Var(name) => self.env[name],
-            Expr::Add(l, r) => self.eval_pure(l) + self.eval_pure(r),
-            Expr::Sub(l, r) => self.eval_pure(l) - self.eval_pure(r),
-            Expr::If(cond, then_, else_) => {
-                if self.eval_bool_pure(cond) {
-                    self.eval_pure(then_)
-                } else {
-                    self.eval_pure(else_)
-                }
-            }
-        }
-    }
-
-    fn eval_bool_pure(&self, expr: &BoolExpr) -> bool {
-        match expr {
-            BoolExpr::Lit(b) => *b,
-            BoolExpr::Le(l, r) => self.eval_pure(l) <= self.eval_pure(r),
-            BoolExpr::Ge(l, r) => self.eval_pure(l) >= self.eval_pure(r),
-            BoolExpr::Eq(l, r) => self.eval_pure(l) == self.eval_pure(r),
-        }
-    }
-
     /// Format an expression with its concrete value: "x + 1 [=4]"
     fn format_expr(&self, expr: &Expr) -> String {
-        let val = self.eval_pure(expr);
+        let val = expr.eval(&self.env);
         match expr {
             Expr::Lit(n) => format!("{}", n),
             _ => format!("{} [={}]", expr, val),
@@ -130,6 +100,8 @@ impl fmt::Display for ConcolicState {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::cmp;
 

@@ -1,5 +1,9 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::ops::{Add, Sub};
+
+/// Environment mapping variable names to concrete values
+pub type Env = HashMap<String, i64>;
 
 /// Abstract Syntax Tree for integer expressions
 #[derive(Debug, Clone, PartialEq)]
@@ -59,11 +63,38 @@ impl Expr {
     pub fn eq_(self, rhs: Expr) -> BoolExpr {
         BoolExpr::Eq(Box::new(self), Box::new(rhs))
     }
+
+    /// Evaluate expression with given environment
+    pub fn eval(&self, env: &Env) -> i64 {
+        match self {
+            Expr::Lit(n) => *n,
+            Expr::Var(name) => env[name],
+            Expr::Add(l, r) => l.eval(env) + r.eval(env),
+            Expr::Sub(l, r) => l.eval(env) - r.eval(env),
+            Expr::If(cond, then_, else_) => {
+                if cond.eval(env) {
+                    then_.eval(env)
+                } else {
+                    else_.eval(env)
+                }
+            }
+        }
+    }
 }
 
 impl BoolExpr {
     pub fn lit(b: bool) -> Self {
         BoolExpr::Lit(b)
+    }
+
+    /// Evaluate boolean expression with given environment
+    pub fn eval(&self, env: &Env) -> bool {
+        match self {
+            BoolExpr::Lit(b) => *b,
+            BoolExpr::Le(l, r) => l.eval(env) <= r.eval(env),
+            BoolExpr::Ge(l, r) => l.eval(env) >= r.eval(env),
+            BoolExpr::Eq(l, r) => l.eval(env) == r.eval(env),
+        }
     }
 }
 
