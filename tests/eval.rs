@@ -63,9 +63,8 @@ fn eval_bool_with_nested_if() {
     let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
     let result = state.eval_bool(&cond);
 
-    assert!(result); // 3 <= 7
+    assert!(result);
     assert_eq!(state.constraints.len(), 1);
-    // Constraint: x <= 5, took true branch
     assert_eq!(state.constraints[0].1, true);
 }
 

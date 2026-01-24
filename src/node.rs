@@ -1,3 +1,4 @@
+use std::fmt;
 use std::ops::Add;
 
 /// Abstract Syntax Tree for integer expressions
@@ -32,7 +33,13 @@ impl Expr {
     }
 
     pub fn var(name: impl Into<String>) -> Self {
-        Expr::Var(name.into())
+        let name = name.into();
+        assert!(
+            name.starts_with(|c: char| c.is_ascii_alphabetic()),
+            "Variable name must start with an alphabetic character: {:?}",
+            name
+        );
+        Expr::Var(name)
     }
 
     pub fn if_(cond: BoolExpr, then_: Expr, else_: Expr) -> Self {
@@ -66,6 +73,30 @@ impl Add for Expr {
     }
 }
 
+impl fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Expr::Lit(n) => write!(f, "{}", n),
+            Expr::Var(name) => write!(f, "{}", name),
+            Expr::Add(l, r) => write!(f, "{} + {}", l, r),
+            Expr::If(cond, then_, else_) => {
+                write!(f, "if {} then {} else {}", cond, then_, else_)
+            }
+        }
+    }
+}
+
+impl fmt::Display for BoolExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BoolExpr::Lit(b) => write!(f, "{}", b),
+            BoolExpr::Le(l, r) => write!(f, "{} <= {}", l, r),
+            BoolExpr::Ge(l, r) => write!(f, "{} >= {}", l, r),
+            BoolExpr::Eq(l, r) => write!(f, "{} == {}", l, r),
+        }
+    }
+}
+
 /// Macro for constructing BoolExpr
 ///
 /// # Examples
@@ -86,4 +117,42 @@ macro_rules! cmp {
     ($lhs:expr, ==, $rhs:expr) => {
         $crate::BoolExpr::Eq(Box::new($lhs), Box::new($rhs))
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "Variable name must start with an alphabetic character")]
+    fn invalid_variable_name() {
+        let _ = Expr::var("123");
+    }
+
+    #[test]
+    fn display_expr() {
+        insta::assert_snapshot!(Expr::lit(42), @"42");
+        insta::assert_snapshot!(Expr::var("x"), @"x");
+        insta::assert_snapshot!(Expr::var("x") + Expr::lit(1), @"x + 1");
+    }
+
+    #[test]
+    fn display_bool_expr() {
+        let x = Expr::var("x");
+        insta::assert_snapshot!(cmp!(x.clone(), <=, Expr::lit(5)), @"x <= 5");
+        insta::assert_snapshot!(cmp!(x.clone(), >=, Expr::lit(5)), @"x >= 5");
+        insta::assert_snapshot!(cmp!(x, ==, Expr::lit(5)), @"x == 5");
+    }
+
+    #[test]
+    fn display_if_expr() {
+        let x = Expr::var("x");
+        let inner = Expr::if_(
+            cmp!(x.clone(), <=, Expr::lit(5)),
+            x,
+            Expr::lit(10),
+        );
+        insta::assert_snapshot!(inner, @"if x <= 5 then x else 10");
+        insta::assert_snapshot!(cmp!(inner, <=, Expr::lit(7)), @"if x <= 5 then x else 10 <= 7");
+    }
 }
