@@ -251,6 +251,42 @@ mod tests {
     }
 
     #[test]
+    fn deeply_nested_if() {
+        // if (if x <= 5 then (if y <= 0 then x+5 else x+6) else x-5) <= 3 then 1 else 0
+        let x = Expr::var("x");
+        let y = Expr::var("y");
+        let inner_inner = Expr::if_(
+            cmp!(y.clone(), <=, Expr::lit(0)),
+            x.clone() + Expr::lit(5),
+            x.clone() + Expr::lit(6),
+        );
+        let inner = Expr::if_(
+            cmp!(x.clone(), <=, Expr::lit(5)),
+            inner_inner,
+            x - Expr::lit(5),
+        );
+        let expr = Expr::if_(
+            cmp!(inner, <=, Expr::lit(3)),
+            Expr::lit(1),
+            Expr::lit(0),
+        );
+
+        // x = 2, y = -1: inner_inner = 2+5 = 7, inner = 7, 7 <= 3 is false, result = 0
+        let mut state = ConcolicState::new(HashMap::from([
+            ("x".to_string(), 2),
+            ("y".to_string(), -1),
+        ]));
+        insta::assert_snapshot!(state.eval(&expr), @"0");
+        insta::assert_snapshot!(state, @r#"
+        Env: x = 2, y = -1
+        Constraints:
+          x [=2] <= 5 : true
+          y [=-1] <= 0 : true
+          ite(x <= 5, ite(y <= 0, x + 5, x + 6), x - 5) [=7] <= 3 : false
+        "#);
+    }
+
+    #[test]
     fn display_state() {
         let x = Expr::var("x");
         let y = Expr::var("y");
