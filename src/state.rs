@@ -29,6 +29,7 @@ impl ConcolicState {
             Expr::Lit(n) => *n,
             Expr::Var(name) => self.env[name],
             Expr::Add(l, r) => self.eval(l) + self.eval(r),
+            Expr::Sub(l, r) => self.eval(l) - self.eval(r),
             Expr::If(cond, then_, else_) => {
                 let cond_val = self.eval_bool(cond);
                 // Record the constraint with the direction taken
@@ -58,6 +59,7 @@ impl ConcolicState {
             Expr::Lit(n) => *n,
             Expr::Var(name) => self.env[name],
             Expr::Add(l, r) => self.eval_pure(l) + self.eval_pure(r),
+            Expr::Sub(l, r) => self.eval_pure(l) - self.eval_pure(r),
             Expr::If(cond, then_, else_) => {
                 if self.eval_bool_pure(cond) {
                     self.eval_pure(then_)
@@ -130,6 +132,123 @@ impl fmt::Display for ConcolicState {
 mod tests {
     use super::*;
     use crate::cmp;
+
+    #[test]
+    fn eval_simple() {
+        let expr = Expr::var("x") + Expr::lit(1);
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        insta::assert_snapshot!(state.eval(&expr), @"6");
+        insta::assert_snapshot!(state, @r#"
+        Env: x = 5
+        Constraints:
+        "#);
+    }
+
+    #[test]
+    fn eval_if_then_branch() {
+        // if x <= 10 then x + 1 else 0
+        let x = Expr::var("x");
+        let expr = Expr::if_(
+            cmp!(x.clone(), <=, Expr::lit(10)),
+            x + Expr::lit(1),
+            Expr::lit(0),
+        );
+
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        insta::assert_snapshot!(state.eval(&expr), @"6");
+        insta::assert_snapshot!(state, @r#"
+        Env: x = 5
+        Constraints:
+          x [=5] <= 10 : true
+        "#);
+    }
+
+    #[test]
+    fn eval_if_else_branch() {
+        // if x <= 10 then x + 1 else 0
+        let x = Expr::var("x");
+        let expr = Expr::if_(
+            cmp!(x.clone(), <=, Expr::lit(10)),
+            x + Expr::lit(1),
+            Expr::lit(0),
+        );
+
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 15)]));
+        insta::assert_snapshot!(state.eval(&expr), @"0");
+        insta::assert_snapshot!(state, @r#"
+        Env: x = 15
+        Constraints:
+          x [=15] <= 10 : false
+        "#);
+    }
+
+    #[test]
+    fn eval_bool_with_nested_if() {
+        // (if x <= 5 then x else 10) <= 7
+        // When x = 3: takes then branch, result is 3 <= 7 = true
+        let x = Expr::var("x");
+        let inner = Expr::if_(
+            cmp!(x.clone(), <=, Expr::lit(5)),
+            x,
+            Expr::lit(10),
+        );
+        let cond = cmp!(inner, <=, Expr::lit(7));
+
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
+        insta::assert_snapshot!(state.eval_bool(&cond), @"true");
+        insta::assert_snapshot!(state, @r#"
+        Env: x = 3
+        Constraints:
+          x [=3] <= 5 : true
+        "#);
+    }
+
+    #[test]
+    fn eval_bool_with_nested_if_else() {
+        // (if x <= 5 then x else 10) <= 7
+        // When x = 8: takes else branch, result is 10 <= 7 = false
+        let x = Expr::var("x");
+        let inner = Expr::if_(
+            cmp!(x.clone(), <=, Expr::lit(5)),
+            x,
+            Expr::lit(10),
+        );
+        let cond = cmp!(inner, <=, Expr::lit(7));
+
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 8)]));
+        insta::assert_snapshot!(state.eval_bool(&cond), @"false");
+        insta::assert_snapshot!(state, @r#"
+        Env: x = 8
+        Constraints:
+          x [=8] <= 5 : false
+        "#);
+    }
+
+    #[test]
+    fn nested_if_in_condition() {
+        // if (if x <= 5 then x + 5 else x - 5) <= 3 then 1 else 0
+        let x = Expr::var("x");
+        let inner = Expr::if_(
+            cmp!(x.clone(), <=, Expr::lit(5)),
+            x.clone() + Expr::lit(5),
+            x - Expr::lit(5),
+        );
+        let expr = Expr::if_(
+            cmp!(inner, <=, Expr::lit(3)),
+            Expr::lit(1),
+            Expr::lit(0),
+        );
+
+        // x = 2: inner = 2 + 5 = 7, 7 <= 3 is false, result = 0
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 2)]));
+        insta::assert_snapshot!(state.eval(&expr), @"0");
+        insta::assert_snapshot!(state, @r#"
+        Env: x = 2
+        Constraints:
+          x [=2] <= 5 : true
+          if x <= 5 then x + 5 else x - 5 [=7] <= 3 : false
+        "#);
+    }
 
     #[test]
     fn display_state() {

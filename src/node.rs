@@ -1,5 +1,5 @@
 use std::fmt;
-use std::ops::Add;
+use std::ops::{Add, Sub};
 
 /// Abstract Syntax Tree for integer expressions
 #[derive(Debug, Clone, PartialEq)]
@@ -10,6 +10,8 @@ pub enum Expr {
     Var(String),
     /// Addition
     Add(Box<Expr>, Box<Expr>),
+    /// Subtraction
+    Sub(Box<Expr>, Box<Expr>),
     /// Conditional expression
     If(Box<BoolExpr>, Box<Expr>, Box<Expr>),
 }
@@ -73,12 +75,21 @@ impl Add for Expr {
     }
 }
 
+impl Sub for Expr {
+    type Output = Expr;
+
+    fn sub(self, rhs: Expr) -> Self::Output {
+        Expr::Sub(Box::new(self), Box::new(rhs))
+    }
+}
+
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Expr::Lit(n) => write!(f, "{}", n),
             Expr::Var(name) => write!(f, "{}", name),
             Expr::Add(l, r) => write!(f, "{} + {}", l, r),
+            Expr::Sub(l, r) => write!(f, "{} - {}", l, r),
             Expr::If(cond, then_, else_) => {
                 write!(f, "if {} then {} else {}", cond, then_, else_)
             }
