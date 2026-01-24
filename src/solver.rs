@@ -5,8 +5,6 @@ use crate::{BoolExpr, ConcolicState, Env, Expr};
 /// Error during constraint solving
 #[derive(Debug, Clone, PartialEq)]
 pub enum SolverError {
-    /// Constraint contains ite (conditional expression)
-    ContainsIte,
     /// Bounds are unsatisfiable (e.g., x >= 10 and x <= 5)
     Unsatisfiable,
     /// Failed to find satisfying assignment after max attempts
@@ -133,8 +131,10 @@ pub fn extract_bounds(
     let mut remaining = Vec::new();
 
     for (expr, taken) in constraints {
+        // If contains ite, we can't extract bounds but can still evaluate
         if bool_contains_ite(expr) {
-            return Err(SolverError::ContainsIte);
+            remaining.push((expr.clone(), *taken));
+            continue;
         }
 
         match expr {
@@ -487,12 +487,14 @@ mod tests {
     }
 
     #[test]
-    fn reject_ite() {
+    fn ite_goes_to_remaining() {
         let x = Expr::var("x");
         let expr = Expr::if_(cmp!(x.clone(), <=, Expr::lit(5)), x, Expr::lit(0));
         let constraints = vec![(cmp!(expr, <=, Expr::lit(3)), true)];
 
-        assert_eq!(extract_bounds(&constraints), Err(SolverError::ContainsIte));
+        let (bounds, remaining) = extract_bounds(&constraints).unwrap();
+        assert!(bounds.is_empty());
+        assert_eq!(remaining.len(), 1);
     }
 
     #[test]
@@ -568,5 +570,28 @@ mod tests {
 
         // Should find x > 5
         assert!(alt_env["x"] > 5);
+    }
+
+    #[test]
+    fn solver_with_ite() {
+        // (if x <= 5 then x else 10) <= 7 : true
+        // This means either (x <= 5 and x <= 7) or (x > 5 and 10 <= 7)
+        // The second case is impossible (10 > 7), so x <= 5
+        let x = Expr::var("x");
+        let inner = Expr::if_(
+            cmp!(x.clone(), <=, Expr::lit(5)),
+            x,
+            Expr::lit(10),
+        );
+        let constraints = vec![(cmp!(inner, <=, Expr::lit(7)), true)];
+        let solver = Solver::new(&constraints).unwrap();
+
+        let mut rng = rand::rng();
+        // Should find x such that (if x <= 5 then x else 10) <= 7
+        // This requires x <= 5 (since 10 > 7)
+        for _ in 0..10 {
+            let env = solver.sample(&mut rng, 1000).unwrap();
+            assert!(env["x"] <= 5, "x = {} should be <= 5", env["x"]);
+        }
     }
 }
