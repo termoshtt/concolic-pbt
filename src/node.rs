@@ -91,7 +91,7 @@ impl fmt::Display for Expr {
             Expr::Add(l, r) => write!(f, "{} + {}", l, r),
             Expr::Sub(l, r) => write!(f, "{} - {}", l, r),
             Expr::If(cond, then_, else_) => {
-                write!(f, "if {} then {} else {}", cond, then_, else_)
+                write!(f, "ite({}, {}, {})", cond, then_, else_)
             }
         }
     }
@@ -163,7 +163,7 @@ mod tests {
             x,
             Expr::lit(10),
         );
-        insta::assert_snapshot!(inner, @"if x <= 5 then x else 10");
-        insta::assert_snapshot!(cmp!(inner, <=, Expr::lit(7)), @"if x <= 5 then x else 10 <= 7");
+        insta::assert_snapshot!(inner, @"ite(x <= 5, x, 10)");
+        insta::assert_snapshot!(cmp!(inner, <=, Expr::lit(7)), @"ite(x <= 5, x, 10) <= 7");
     }
 }

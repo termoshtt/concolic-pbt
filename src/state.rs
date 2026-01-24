@@ -246,7 +246,7 @@ mod tests {
         Env: x = 2
         Constraints:
           x [=2] <= 5 : true
-          if x <= 5 then x + 5 else x - 5 [=7] <= 3 : false
+          ite(x <= 5, x + 5, x - 5) [=7] <= 3 : false
         "#);
     }
 
