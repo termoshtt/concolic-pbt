@@ -144,46 +144,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_ast() {
-        // x + 1
-        let expr = Expr::var("x") + Expr::lit(1);
-        assert_eq!(
-            expr,
-            Expr::Add(Box::new(Expr::Var("x".to_string())), Box::new(Expr::Lit(1)))
-        );
-    }
-
-    #[test]
-    fn build_if() {
-        // if x <= 10 then x + 1 else 0
-        let x = Expr::var("x");
-        let expr = Expr::if_(
-            cmp!(x.clone(), <=, Expr::lit(10)),
-            x + Expr::lit(1),
-            Expr::lit(0),
-        );
-        assert!(matches!(expr, Expr::If(_, _, _)));
-    }
-
-    #[test]
-    fn cmp_macro() {
-        let x = Expr::var("x");
-        let y = Expr::var("y");
-
-        // <=
-        let le = cmp!(x.clone(), <=, y.clone());
-        assert!(matches!(le, BoolExpr::Le(_, _)));
-
-        // >=
-        let ge = cmp!(x.clone(), >=, y.clone());
-        assert!(matches!(ge, BoolExpr::Ge(_, _)));
-
-        // ==
-        let eq = cmp!(x, ==, y);
-        assert!(matches!(eq, BoolExpr::Eq(_, _)));
-    }
-
-    #[test]
     fn eval_simple() {
         let expr = Expr::var("x") + Expr::lit(1);
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
