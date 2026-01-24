@@ -109,6 +109,28 @@ impl BoolExpr {
     }
 }
 
+/// Macro for constructing BoolExpr
+///
+/// # Examples
+/// ```
+/// use concolic_pbt::{cmp, Expr};
+///
+/// let x = Expr::var("x");
+/// let cond = cmp!(x, <=, Expr::lit(10));
+/// ```
+#[macro_export]
+macro_rules! cmp {
+    ($lhs:expr, <=, $rhs:expr) => {
+        $crate::BoolExpr::Le(Box::new($lhs), Box::new($rhs))
+    };
+    ($lhs:expr, >=, $rhs:expr) => {
+        $crate::BoolExpr::Ge(Box::new($lhs), Box::new($rhs))
+    };
+    ($lhs:expr, ==, $rhs:expr) => {
+        $crate::BoolExpr::Eq(Box::new($lhs), Box::new($rhs))
+    };
+}
+
 impl Add for Expr {
     type Output = Expr;
 
@@ -136,11 +158,29 @@ mod tests {
         // if x <= 10 then x + 1 else 0
         let x = Expr::var("x");
         let expr = Expr::if_(
-            x.clone().le(Expr::lit(10)),
+            cmp!(x.clone(), <=, Expr::lit(10)),
             x + Expr::lit(1),
             Expr::lit(0),
         );
         assert!(matches!(expr, Expr::If(_, _, _)));
+    }
+
+    #[test]
+    fn cmp_macro() {
+        let x = Expr::var("x");
+        let y = Expr::var("y");
+
+        // <=
+        let le = cmp!(x.clone(), <=, y.clone());
+        assert!(matches!(le, BoolExpr::Le(_, _)));
+
+        // >=
+        let ge = cmp!(x.clone(), >=, y.clone());
+        assert!(matches!(ge, BoolExpr::Ge(_, _)));
+
+        // ==
+        let eq = cmp!(x, ==, y);
+        assert!(matches!(eq, BoolExpr::Eq(_, _)));
     }
 
     #[test]
@@ -156,7 +196,7 @@ mod tests {
         // if x <= 10 then x + 1 else 0
         let x = Expr::var("x");
         let expr = Expr::if_(
-            x.clone().le(Expr::lit(10)),
+            cmp!(x.clone(), <=, Expr::lit(10)),
             x + Expr::lit(1),
             Expr::lit(0),
         );
@@ -175,7 +215,7 @@ mod tests {
         // if x <= 10 then x + 1 else 0
         let x = Expr::var("x");
         let expr = Expr::if_(
-            x.clone().le(Expr::lit(10)),
+            cmp!(x.clone(), <=, Expr::lit(10)),
             x + Expr::lit(1),
             Expr::lit(0),
         );
@@ -194,12 +234,12 @@ mod tests {
         // (if x <= 5 then x else 10) <= 7
         // When x = 3: takes then branch, result is 3 <= 7 = true
         let x = Expr::var("x");
-        let cond = Expr::if_(
-            x.clone().le(Expr::lit(5)),
+        let inner = Expr::if_(
+            cmp!(x.clone(), <=, Expr::lit(5)),
             x,
             Expr::lit(10),
-        )
-        .le(Expr::lit(7));
+        );
+        let cond = cmp!(inner, <=, Expr::lit(7));
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
         let result = state.eval_bool(&cond);
@@ -215,12 +255,12 @@ mod tests {
         // (if x <= 5 then x else 10) <= 7
         // When x = 8: takes else branch, result is 10 <= 7 = false
         let x = Expr::var("x");
-        let cond = Expr::if_(
-            x.clone().le(Expr::lit(5)),
+        let inner = Expr::if_(
+            cmp!(x.clone(), <=, Expr::lit(5)),
             x,
             Expr::lit(10),
-        )
-        .le(Expr::lit(7));
+        );
+        let cond = cmp!(inner, <=, Expr::lit(7));
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 8)]));
         let result = state.eval_bool(&cond);
