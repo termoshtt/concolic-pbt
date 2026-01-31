@@ -369,9 +369,30 @@ fn collect_variables_bool(expr: &BoolExpr, vars: &mut Vec<String>) {
     }
 }
 
-/// Generate alternative path by negating the constraint at index i
+/// Generate constraints for exploring an alternative path by negating at index i
 ///
-/// Returns constraints[0..i] with constraints[i] negated
+/// Returns `constraints[0..i]` unchanged plus `constraints[i]` with direction negated.
+/// Constraints after index i are intentionally excluded.
+///
+/// # Why exclude constraints after index i?
+///
+/// When the original path is `[T, T, F, F]` and we negate at index 2,
+/// we want to explore paths starting with `[T, T, T, ...]`.
+/// The 4th constraint and beyond may differ or not exist at all in the new execution.
+///
+/// For example, if the original code was:
+/// ```text
+/// if cond0 {           // T
+///   if cond1 {         // T
+///     if cond2 {       // F (we negate this to T)
+///       if cond3 { }   // F (this branch may not exist when cond2 is T)
+///     }
+///   }
+/// }
+/// ```
+///
+/// By only requiring `[T, T, T]`, we let the solver find any input satisfying
+/// these constraints, and the actual execution determines what happens next.
 pub fn negate_at(constraints: &[(BoolExpr, bool)], i: usize) -> Vec<(BoolExpr, bool)> {
     let mut result = constraints[0..i].to_vec();
     if i < constraints.len() {
