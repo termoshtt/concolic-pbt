@@ -25,15 +25,27 @@ A minimal expression language with:
 - **Integer expressions**: literals, variables, addition, subtraction, conditional (`if-then-else`)
 - **Boolean expressions**: comparisons (`<=`, `>=`, `==`)
 
-```rust
-use concolic_pbt::{Expr, cmp};
+#### Grammar
 
-let x = Expr::var("x");
-let expr = Expr::if_(
-    cmp!(x.clone(), <=, Expr::lit(5)),
-    x.clone() + Expr::lit(1),
-    x - Expr::lit(1),
-);
+```text
+expr       := if_expr | arith_expr
+if_expr    := "if" bool_expr "then" expr "else" expr
+arith_expr := term (('+' | '-') term)*
+term       := number | var | '(' expr ')'
+
+bool_expr  := "true" | "false" | expr cmp_op expr
+cmp_op     := "<=" | ">=" | "=="
+
+var        := [a-z][a-z0-9_]*
+number     := '-'? [0-9]+
+```
+
+#### Example
+
+```rust
+use concolic_pbt::parse_expr;
+
+let expr = parse_expr("if x <= 5 then x + 1 else x - 1").unwrap();
 ```
 
 ### Concolic Execution
@@ -41,9 +53,10 @@ let expr = Expr::if_(
 `ConcolicState` evaluates expressions while collecting path constraints:
 
 ```rust
-use concolic_pbt::ConcolicState;
+use concolic_pbt::{parse_expr, ConcolicState};
 use std::collections::HashMap;
 
+let expr = parse_expr("if x <= 5 then x + 1 else x - 1").unwrap();
 let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
 let result = state.eval(&expr);  // Returns 4
 // state.constraints now contains: [(x <= 5, true)]
@@ -62,10 +75,10 @@ let result = state.eval(&expr);  // Returns 4
 `Explorer` performs depth-first search over execution paths:
 
 ```rust
-use concolic_pbt::{Explorer, Solver, ExploreResult, cmp, Expr};
+use concolic_pbt::{parse_bool_expr, Explorer, Solver, ExploreResult};
 use std::collections::HashMap;
 
-let property = cmp!(Expr::var("x"), <=, Expr::lit(100));
+let property = parse_bool_expr("x <= 100").unwrap();
 
 let rng = rand::rngs::StdRng::seed_from_u64(42);
 let solver = Solver::new(rng, 100);
