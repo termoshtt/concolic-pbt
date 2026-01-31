@@ -259,16 +259,30 @@ pub fn extract_bounds(
     Ok((bounds, remaining))
 }
 
-/// Solver for constraint satisfaction
-pub struct Solver {
-    bounds: Bounds,
-    remaining: Vec<(BoolExpr, bool)>,
-    variables: Vec<String>,
+/// Solver for constraint satisfaction with random sampling
+pub struct Solver<R> {
+    rng: R,
+    max_attempts: usize,
 }
 
-impl Solver {
-    /// Create solver from constraints
-    pub fn new(constraints: &[(BoolExpr, bool)]) -> Result<Self, SolverError> {
+impl<R: rand::Rng> Solver<R> {
+    /// Create a new solver with given RNG and max attempts
+    pub fn new(rng: R, max_attempts: usize) -> Self {
+        Self { rng, max_attempts }
+    }
+
+    /// Try to find an input that explores an alternative path
+    pub fn find_alternative(
+        &mut self,
+        state: &ConcolicState,
+        index: usize,
+    ) -> Result<Env, SolverError> {
+        let negated = negate_at(&state.constraints, index);
+        self.solve(&negated)
+    }
+
+    /// Solve constraints and return a satisfying assignment
+    pub fn solve(&mut self, constraints: &[(BoolExpr, bool)]) -> Result<Env, SolverError> {
         let (bounds, remaining) = extract_bounds(constraints)?;
 
         // Collect all variable names from constraints
@@ -279,26 +293,23 @@ impl Solver {
         variables.sort();
         variables.dedup();
 
-        Ok(Self {
-            bounds,
-            remaining,
-            variables,
-        })
+        self.sample(&bounds, &remaining, &variables)
     }
 
-    /// Sample an Env that satisfies all constraints
-    pub fn sample(
-        &self,
-        rng: &mut impl rand::Rng,
-        max_attempts: usize,
+    /// Sample an Env that satisfies bounds and remaining constraints
+    fn sample(
+        &mut self,
+        bounds: &Bounds,
+        remaining: &[(BoolExpr, bool)],
+        variables: &[String],
     ) -> Result<Env, SolverError> {
-        for _ in 0..max_attempts {
+        for _ in 0..self.max_attempts {
             let mut env = Env::new();
 
             // Sample each variable from its bounds
-            for var in &self.variables {
-                let bound = self.bounds.get(var).cloned().unwrap_or_default();
-                match bound.sample(rng) {
+            for var in variables {
+                let bound = bounds.get(var).cloned().unwrap_or_default();
+                match bound.sample(&mut self.rng) {
                     Some(val) => {
                         env.insert(var.clone(), val);
                     }
@@ -307,7 +318,7 @@ impl Solver {
             }
 
             // Check remaining constraints
-            if self.check_remaining(&env) {
+            if Self::check_remaining(remaining, &env) {
                 return Ok(env);
             }
         }
@@ -316,8 +327,8 @@ impl Solver {
     }
 
     /// Check if env satisfies all remaining constraints
-    fn check_remaining(&self, env: &Env) -> bool {
-        for (expr, expected) in &self.remaining {
+    fn check_remaining(remaining: &[(BoolExpr, bool)], env: &Env) -> bool {
+        for (expr, expected) in remaining {
             if expr.eval(env) != *expected {
                 return false;
             }
@@ -370,32 +381,6 @@ pub fn negate_at(constraints: &[(BoolExpr, bool)], i: usize) -> Vec<(BoolExpr, b
     result
 }
 
-/// Try to find an input that explores an alternative path
-pub fn find_alternative(
-    state: &ConcolicState,
-    index: usize,
-    rng: &mut impl rand::Rng,
-    max_attempts: usize,
-) -> Result<Env, SolverError> {
-    let negated = negate_at(&state.constraints, index);
-    let solver = Solver::new(&negated)?;
-    solver.sample(rng, max_attempts)
-}
-
-/// Try all alternative paths and return the first successful one
-pub fn find_any_alternative(
-    state: &ConcolicState,
-    rng: &mut impl rand::Rng,
-    max_attempts: usize,
-) -> Option<(usize, Env)> {
-    for i in (0..state.constraints.len()).rev() {
-        match find_alternative(state, i, rng, max_attempts) {
-            Ok(env) => return Some((i, env)),
-            Err(_) => continue,
-        }
-    }
-    None
-}
 
 #[cfg(test)]
 mod tests {
@@ -502,10 +487,9 @@ mod tests {
         // x <= 5 (true) → find x in [-1000, 5]
         let x = Expr::var("x");
         let constraints = vec![(cmp!(x, <=, Expr::lit(5)), true)];
-        let solver = Solver::new(&constraints).unwrap();
 
-        let mut rng = rand::rng();
-        let env = solver.sample(&mut rng, 100).unwrap();
+        let mut solver = Solver::new(rand::rng(), 100);
+        let env = solver.solve(&constraints).unwrap();
         assert!(env["x"] <= 5);
     }
 
@@ -519,10 +503,9 @@ mod tests {
             (cmp!(x.clone(), <=, Expr::lit(10)), true),
             (cmp!(x, <=, y), true),
         ];
-        let solver = Solver::new(&constraints).unwrap();
 
-        let mut rng = rand::rng();
-        let env = solver.sample(&mut rng, 1000).unwrap();
+        let mut solver = Solver::new(rand::rng(), 1000);
+        let env = solver.solve(&constraints).unwrap();
         assert!(env["x"] <= 10);
         assert!(env["x"] <= env["y"]);
     }
@@ -565,8 +548,8 @@ mod tests {
         assert_eq!(state.constraints[0].1, true);
 
         // Find alternative (negate the constraint)
-        let mut rng = rand::rng();
-        let alt_env = find_alternative(&state, 0, &mut rng, 100).unwrap();
+        let mut solver = Solver::new(rand::rng(), 100);
+        let alt_env = solver.find_alternative(&state, 0).unwrap();
 
         // Should find x > 5
         assert!(alt_env["x"] > 5);
@@ -584,13 +567,12 @@ mod tests {
             Expr::lit(10),
         );
         let constraints = vec![(cmp!(inner, <=, Expr::lit(7)), true)];
-        let solver = Solver::new(&constraints).unwrap();
 
-        let mut rng = rand::rng();
+        let mut solver = Solver::new(rand::rng(), 1000);
         // Should find x such that (if x <= 5 then x else 10) <= 7
         // This requires x <= 5 (since 10 > 7)
         for _ in 0..10 {
-            let env = solver.sample(&mut rng, 1000).unwrap();
+            let env = solver.solve(&constraints).unwrap();
             assert!(env["x"] <= 5, "x = {} should be <= 5", env["x"]);
         }
     }

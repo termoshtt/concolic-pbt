@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{find_alternative, BoolExpr, ConcolicState, Env};
+use crate::{BoolExpr, ConcolicState, Env, Solver};
 
 /// Result of exploration
 #[derive(Debug, Clone, PartialEq)]
@@ -34,26 +34,26 @@ fn format_env(env: &Env) -> String {
 }
 
 /// Depth-first explorer for finding property violations
-pub struct Explorer {
+pub struct Explorer<R> {
+    /// Solver for finding alternative paths
+    solver: Solver<R>,
     /// Paths that were actually executed with concrete inputs
     visited: Vec<(Path, Env)>,
     /// Paths where solver couldn't find a satisfying input
     unreached: Vec<Path>,
     /// Maximum number of iterations (paths to explore)
     max_iterations: usize,
-    /// Maximum attempts for solver sampling
-    max_solver_attempts: usize,
     /// Current iteration count
     iterations: usize,
 }
 
-impl Explorer {
-    pub fn new(max_iterations: usize, max_solver_attempts: usize) -> Self {
+impl<R: rand::Rng> Explorer<R> {
+    pub fn new(solver: Solver<R>, max_iterations: usize) -> Self {
         Self {
+            solver,
             visited: Vec::new(),
             unreached: Vec::new(),
             max_iterations,
-            max_solver_attempts,
             iterations: 0,
         }
     }
@@ -62,20 +62,14 @@ impl Explorer {
     ///
     /// The property is a BoolExpr that should hold for all inputs.
     /// Returns Counterexample(env) if we find an input where property is false.
-    pub fn find_counterexample(
-        &mut self,
-        property: &BoolExpr,
-        initial_env: Env,
-        rng: &mut impl rand::Rng,
-    ) -> ExploreResult {
-        self.explore_dfs(property, initial_env, rng, 0)
+    pub fn find_counterexample(&mut self, property: &BoolExpr, initial_env: Env) -> ExploreResult {
+        self.explore_dfs(property, initial_env, 0)
     }
 
     fn explore_dfs(
         &mut self,
         property: &BoolExpr,
         env: Env,
-        rng: &mut impl rand::Rng,
         min_index: usize,
     ) -> ExploreResult {
         if self.iterations >= self.max_iterations {
@@ -110,12 +104,12 @@ impl Explorer {
         // Only negate constraints at index >= min_index (earlier ones are handled by parent)
         for i in (min_index..state.constraints.len()).rev() {
             // Try to find an input for the alternative path
-            match find_alternative(&state, i, rng, self.max_solver_attempts) {
+            match self.solver.find_alternative(&state, i) {
                 Ok(new_env) => {
                     // Recurse with i+1 as the new min_index
                     // Child should not negate constraints at or before index i
                     // (negating at i would bring us back to the parent's path prefix)
-                    let result = self.explore_dfs(property, new_env, rng, i + 1);
+                    let result = self.explore_dfs(property, new_env, i + 1);
                     if matches!(result, ExploreResult::Counterexample(_) | ExploreResult::MaxIterationsReached) {
                         return result;
                     }
@@ -148,7 +142,7 @@ impl Explorer {
     }
 }
 
-impl fmt::Display for Explorer {
+impl<R> fmt::Display for Explorer<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Reached:")?;
         for (path, env) in &self.visited {
@@ -182,11 +176,12 @@ mod tests {
         let x = Expr::var("x");
         let property = cmp!(x, <=, Expr::lit(10));
 
-        let mut explorer = Explorer::new(100, 100);
+        let rng = rand::rngs::StdRng::seed_from_u64(42);
+        let solver = Solver::new(rng, 100);
+        let mut explorer = Explorer::new(solver, 100);
         let initial_env = HashMap::from([("x".to_string(), 5)]);
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
-        let result = explorer.find_counterexample(&property, initial_env, &mut rng);
+        let result = explorer.find_counterexample(&property, initial_env);
 
         assert!(matches!(result, ExploreResult::Counterexample(_)));
         insta::assert_snapshot!(explorer, @r###"
@@ -202,11 +197,12 @@ mod tests {
         let x = Expr::var("x");
         let property = cmp!(x.clone(), <=, x);
 
-        let mut explorer = Explorer::new(100, 100);
+        let rng = rand::rngs::StdRng::seed_from_u64(42);
+        let solver = Solver::new(rng, 100);
+        let mut explorer = Explorer::new(solver, 100);
         let initial_env = HashMap::from([("x".to_string(), 5)]);
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
-        let result = explorer.find_counterexample(&property, initial_env, &mut rng);
+        let result = explorer.find_counterexample(&property, initial_env);
 
         assert_eq!(result, ExploreResult::Verified);
         insta::assert_snapshot!(explorer, @r###"
@@ -231,11 +227,12 @@ mod tests {
         )
         .le(Expr::lit(10));
 
-        let mut explorer = Explorer::new(100, 100);
+        let rng = rand::rngs::StdRng::seed_from_u64(42);
+        let solver = Solver::new(rng, 100);
+        let mut explorer = Explorer::new(solver, 100);
         let initial_env = HashMap::from([("x".to_string(), 3)]);
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
-        let result = explorer.find_counterexample(&property, initial_env, &mut rng);
+        let result = explorer.find_counterexample(&property, initial_env);
 
         // Should find counterexample: x > 5 and x - 1 > 10, so x > 11
         assert!(matches!(result, ExploreResult::Counterexample(_)));
@@ -266,11 +263,12 @@ mod tests {
         )
         .ge(Expr::lit(1)); // property: result >= 1
 
-        let mut explorer = Explorer::new(100, 100);
+        let rng = rand::rngs::StdRng::seed_from_u64(42);
+        let solver = Solver::new(rng, 100);
+        let mut explorer = Explorer::new(solver, 100);
         let initial_env = HashMap::from([("x".to_string(), 3)]);
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
 
-        let result = explorer.find_counterexample(&property, initial_env, &mut rng);
+        let result = explorer.find_counterexample(&property, initial_env);
 
         assert_eq!(result, ExploreResult::Verified);
         insta::assert_snapshot!(explorer, @r#"
