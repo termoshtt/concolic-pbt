@@ -27,10 +27,8 @@ impl ConcolicState {
             Expr::Add(l, r) => self.eval(l) + self.eval(r),
             Expr::Sub(l, r) => self.eval(l) - self.eval(r),
             Expr::If(cond, then_, else_) => {
-                let cond_val = self.eval_bool(cond);
-                // Record the constraint with the direction taken
-                self.constraints.push((*cond.clone(), cond_val));
-                if cond_val {
+                // eval_bool records the constraint
+                if self.eval_bool(cond) {
                     self.eval(then_)
                 } else {
                     self.eval(else_)
@@ -39,14 +37,16 @@ impl ConcolicState {
         }
     }
 
-    /// Evaluate a boolean expression (also records constraints from nested Exprs)
+    /// Evaluate a boolean expression and record it as a constraint
     pub fn eval_bool(&mut self, expr: &BoolExpr) -> bool {
-        match expr {
-            BoolExpr::Lit(b) => *b,
+        let result = match expr {
+            BoolExpr::Lit(b) => return *b, // Literals are constants, no constraint
             BoolExpr::Le(l, r) => self.eval(l) <= self.eval(r),
             BoolExpr::Ge(l, r) => self.eval(l) >= self.eval(r),
             BoolExpr::Eq(l, r) => self.eval(l) == self.eval(r),
-        }
+        };
+        self.constraints.push((expr.clone(), result));
+        result
     }
 
     /// Format an expression with its concrete value: "x + 1 [=4]"
@@ -168,11 +168,12 @@ mod tests {
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
         insta::assert_snapshot!(state.eval_bool(&cond), @"true");
-        insta::assert_snapshot!(state, @r#"
+        insta::assert_snapshot!(state, @r###"
         Env: x = 3
         Constraints:
           x [=3] <= 5 : true
-        "#);
+          ite(x <= 5, x, 10) [=3] <= 7 : true
+        "###);
     }
 
     #[test]
@@ -189,11 +190,12 @@ mod tests {
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 8)]));
         insta::assert_snapshot!(state.eval_bool(&cond), @"false");
-        insta::assert_snapshot!(state, @r#"
+        insta::assert_snapshot!(state, @r###"
         Env: x = 8
         Constraints:
           x [=8] <= 5 : false
-        "#);
+          ite(x <= 5, x, 10) [=10] <= 7 : false
+        "###);
     }
 
     #[test]
