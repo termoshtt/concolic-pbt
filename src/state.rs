@@ -103,11 +103,11 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::cmp;
+    use crate::{parse_bool_expr, parse_expr};
 
     #[test]
     fn eval_simple() {
-        let expr = Expr::var("x") + Expr::lit(1);
+        let expr = parse_expr("x + 1").unwrap();
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
         insta::assert_snapshot!(state.eval(&expr), @"6");
         insta::assert_snapshot!(state, @r#"
@@ -118,13 +118,7 @@ mod tests {
 
     #[test]
     fn eval_if_then_branch() {
-        // if x <= 10 then x + 1 else 0
-        let x = Expr::var("x");
-        let expr = Expr::if_(
-            cmp!(x.clone(), <=, Expr::lit(10)),
-            x + Expr::lit(1),
-            Expr::lit(0),
-        );
+        let expr = parse_expr("if x <= 10 then x + 1 else 0").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
         insta::assert_snapshot!(state.eval(&expr), @"6");
@@ -137,13 +131,7 @@ mod tests {
 
     #[test]
     fn eval_if_else_branch() {
-        // if x <= 10 then x + 1 else 0
-        let x = Expr::var("x");
-        let expr = Expr::if_(
-            cmp!(x.clone(), <=, Expr::lit(10)),
-            x + Expr::lit(1),
-            Expr::lit(0),
-        );
+        let expr = parse_expr("if x <= 10 then x + 1 else 0").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 15)]));
         insta::assert_snapshot!(state.eval(&expr), @"0");
@@ -158,13 +146,7 @@ mod tests {
     fn eval_bool_with_nested_if() {
         // (if x <= 5 then x else 10) <= 7
         // When x = 3: takes then branch, result is 3 <= 7 = true
-        let x = Expr::var("x");
-        let inner = Expr::if_(
-            cmp!(x.clone(), <=, Expr::lit(5)),
-            x,
-            Expr::lit(10),
-        );
-        let cond = cmp!(inner, <=, Expr::lit(7));
+        let cond = parse_bool_expr("(if x <= 5 then x else 10) <= 7").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
         insta::assert_snapshot!(state.eval_bool(&cond), @"true");
@@ -180,13 +162,7 @@ mod tests {
     fn eval_bool_with_nested_if_else() {
         // (if x <= 5 then x else 10) <= 7
         // When x = 8: takes else branch, result is 10 <= 7 = false
-        let x = Expr::var("x");
-        let inner = Expr::if_(
-            cmp!(x.clone(), <=, Expr::lit(5)),
-            x,
-            Expr::lit(10),
-        );
-        let cond = cmp!(inner, <=, Expr::lit(7));
+        let cond = parse_bool_expr("(if x <= 5 then x else 10) <= 7").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 8)]));
         insta::assert_snapshot!(state.eval_bool(&cond), @"false");
@@ -201,17 +177,7 @@ mod tests {
     #[test]
     fn nested_if_in_condition() {
         // if (if x <= 5 then x + 5 else x - 5) <= 3 then 1 else 0
-        let x = Expr::var("x");
-        let inner = Expr::if_(
-            cmp!(x.clone(), <=, Expr::lit(5)),
-            x.clone() + Expr::lit(5),
-            x - Expr::lit(5),
-        );
-        let expr = Expr::if_(
-            cmp!(inner, <=, Expr::lit(3)),
-            Expr::lit(1),
-            Expr::lit(0),
-        );
+        let expr = parse_expr("if (if x <= 5 then x + 5 else x - 5) <= 3 then 1 else 0").unwrap();
 
         // x = 2: inner = 2 + 5 = 7, 7 <= 3 is false, result = 0
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 2)]));
@@ -227,23 +193,10 @@ mod tests {
     #[test]
     fn deeply_nested_if() {
         // if (if x <= 5 then (if y <= 0 then x+5 else x+6) else x-5) <= 3 then 1 else 0
-        let x = Expr::var("x");
-        let y = Expr::var("y");
-        let inner_inner = Expr::if_(
-            cmp!(y.clone(), <=, Expr::lit(0)),
-            x.clone() + Expr::lit(5),
-            x.clone() + Expr::lit(6),
-        );
-        let inner = Expr::if_(
-            cmp!(x.clone(), <=, Expr::lit(5)),
-            inner_inner,
-            x - Expr::lit(5),
-        );
-        let expr = Expr::if_(
-            cmp!(inner, <=, Expr::lit(3)),
-            Expr::lit(1),
-            Expr::lit(0),
-        );
+        let expr = parse_expr(
+            "if (if x <= 5 then (if y <= 0 then x + 5 else x + 6) else x - 5) <= 3 then 1 else 0",
+        )
+        .unwrap();
 
         // x = 2, y = -1: inner_inner = 2+5 = 7, inner = 7, 7 <= 3 is false, result = 0
         let mut state = ConcolicState::new(HashMap::from([
@@ -262,17 +215,8 @@ mod tests {
 
     #[test]
     fn display_state() {
-        let x = Expr::var("x");
-        let y = Expr::var("y");
-        let expr = Expr::if_(
-            cmp!(x.clone() + Expr::lit(1), <=, Expr::lit(5)),
-            Expr::if_(
-                cmp!(y.clone(), <=, x + Expr::lit(2)),
-                y,
-                Expr::lit(0),
-            ),
-            Expr::lit(-1),
-        );
+        let expr =
+            parse_expr("if x + 1 <= 5 then (if y <= x + 2 then y else 0) else -1").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([
             ("x".to_string(), 3),

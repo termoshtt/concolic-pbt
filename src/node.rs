@@ -164,6 +164,7 @@ macro_rules! cmp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{parse_bool_expr, parse_expr};
 
     #[test]
     #[should_panic(expected = "Variable name must start with an alphabetic character")]
@@ -173,28 +174,22 @@ mod tests {
 
     #[test]
     fn display_expr() {
-        insta::assert_snapshot!(Expr::lit(42), @"42");
-        insta::assert_snapshot!(Expr::var("x"), @"x");
-        insta::assert_snapshot!(Expr::var("x") + Expr::lit(1), @"x + 1");
+        insta::assert_snapshot!(parse_expr("42").unwrap(), @"42");
+        insta::assert_snapshot!(parse_expr("x").unwrap(), @"x");
+        insta::assert_snapshot!(parse_expr("x + 1").unwrap(), @"x + 1");
+        insta::assert_snapshot!(parse_expr("x - 1").unwrap(), @"x - 1");
     }
 
     #[test]
     fn display_bool_expr() {
-        let x = Expr::var("x");
-        insta::assert_snapshot!(cmp!(x.clone(), <=, Expr::lit(5)), @"x <= 5");
-        insta::assert_snapshot!(cmp!(x.clone(), >=, Expr::lit(5)), @"x >= 5");
-        insta::assert_snapshot!(cmp!(x, ==, Expr::lit(5)), @"x == 5");
+        insta::assert_snapshot!(parse_bool_expr("x <= 5").unwrap(), @"x <= 5");
+        insta::assert_snapshot!(parse_bool_expr("x >= 5").unwrap(), @"x >= 5");
+        insta::assert_snapshot!(parse_bool_expr("x == 5").unwrap(), @"x == 5");
     }
 
     #[test]
     fn display_if_expr() {
-        let x = Expr::var("x");
-        let inner = Expr::if_(
-            cmp!(x.clone(), <=, Expr::lit(5)),
-            x,
-            Expr::lit(10),
-        );
-        insta::assert_snapshot!(inner, @"ite(x <= 5, x, 10)");
-        insta::assert_snapshot!(cmp!(inner, <=, Expr::lit(7)), @"ite(x <= 5, x, 10) <= 7");
+        insta::assert_snapshot!(parse_expr("if x <= 5 then x else 10").unwrap(), @"ite(x <= 5, x, 10)");
+        insta::assert_snapshot!(parse_bool_expr("(if x <= 5 then x else 10) <= 7").unwrap(), @"ite(x <= 5, x, 10) <= 7");
     }
 }

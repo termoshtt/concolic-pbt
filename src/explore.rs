@@ -165,7 +165,7 @@ impl<R> fmt::Display for Explorer<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{cmp, Expr};
+    use crate::parse_bool_expr;
     use rand::SeedableRng;
     use std::collections::HashMap;
 
@@ -173,8 +173,7 @@ mod tests {
     fn find_simple_counterexample() {
         // Property: x <= 10
         // Should find counterexample where x > 10
-        let x = Expr::var("x");
-        let property = cmp!(x, <=, Expr::lit(10));
+        let property = parse_bool_expr("x <= 10").unwrap();
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
@@ -194,8 +193,7 @@ mod tests {
     #[test]
     fn verify_always_true() {
         // Property: x <= x (always true)
-        let x = Expr::var("x");
-        let property = cmp!(x.clone(), <=, x);
+        let property = parse_bool_expr("x <= x").unwrap();
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
@@ -217,15 +215,9 @@ mod tests {
 
     #[test]
     fn explore_branching_property() {
-        // Property: if x <= 5 then x + 1 <= 10 else x - 1 <= 10
+        // Property: (if x <= 5 then x + 1 else x - 1) <= 10
         // This should hold for x in reasonable range
-        let x = Expr::var("x");
-        let property = Expr::if_(
-            cmp!(x.clone(), <=, Expr::lit(5)),
-            x.clone() + Expr::lit(1),
-            x.clone() - Expr::lit(1),
-        )
-        .le(Expr::lit(10));
+        let property = parse_bool_expr("(if x <= 5 then x + 1 else x - 1) <= 10").unwrap();
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
@@ -248,20 +240,10 @@ mod tests {
 
     #[test]
     fn unreached_path() {
-        // Property: if x <= 5 then (if x >= 10 then false else true) else true
+        // Property: (if x <= 5 then (if x >= 10 then 0 else 1) else 1) >= 1
         // The path (x <= 5, true) -> (x >= 10, true) is unreachable (x <= 5 and x >= 10 is contradictory)
-        let x = Expr::var("x");
-        let inner = Expr::if_(
-            cmp!(x.clone(), >=, Expr::lit(10)),
-            Expr::lit(0), // false branch (unreachable when x <= 5)
-            Expr::lit(1), // true branch
-        );
-        let property = Expr::if_(
-            cmp!(x, <=, Expr::lit(5)),
-            inner,
-            Expr::lit(1),
-        )
-        .ge(Expr::lit(1)); // property: result >= 1
+        let property =
+            parse_bool_expr("(if x <= 5 then (if x >= 10 then 0 else 1) else 1) >= 1").unwrap();
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
@@ -296,13 +278,8 @@ mod tests {
         //   Path: [F, T, T] or [F, F, T] (x<=5, x>=10, result>=1)
         //
         // This demonstrates that negating at index 0 can lead to a longer path.
-        let x = Expr::var("x");
-        let inner = Expr::if_(
-            cmp!(x.clone(), >=, Expr::lit(10)),
-            Expr::lit(2),
-            Expr::lit(3),
-        );
-        let property = Expr::if_(cmp!(x, <=, Expr::lit(5)), Expr::lit(1), inner).ge(Expr::lit(1));
+        let property =
+            parse_bool_expr("(if x <= 5 then 1 else (if x >= 10 then 2 else 3)) >= 1").unwrap();
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);

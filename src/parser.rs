@@ -17,8 +17,14 @@ use crate::{BoolExpr, Expr};
 /// var        := [a-z][a-z0-9_]*
 /// number     := '-'? [0-9]+
 /// ```
-fn parser<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> {
-    recursive(|expr| {
+fn expr_and_bool_parser<'a>(
+) -> (
+    impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> + Clone,
+    impl Parser<'a, &'a str, BoolExpr, extra::Err<Rich<'a, char>>> + Clone,
+) {
+    // We need mutual recursion between expr and bool_expr
+    // Use recursive to create the expr parser, which internally creates bool_expr
+    let expr = recursive(|expr| {
         // Number literal: optional minus followed by digits
         let number = just('-')
             .or_not()
@@ -34,10 +40,15 @@ fn parser<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> {
         let var = text::ident()
             .try_map(|s: &str, span| {
                 let first = s.chars().next().unwrap();
-                if first.is_ascii_lowercase() && !["if", "then", "else", "true", "false"].contains(&s) {
+                if first.is_ascii_lowercase()
+                    && !["if", "then", "else", "true", "false"].contains(&s)
+                {
                     Ok(Expr::Var(s.to_string()))
                 } else {
-                    Err(Rich::custom(span, format!("'{}' is not a valid variable name", s)))
+                    Err(Rich::custom(
+                        span,
+                        format!("'{}' is not a valid variable name", s),
+                    ))
                 }
             })
             .padded();
@@ -73,13 +84,15 @@ fn parser<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> {
         ))
         .padded();
 
-        // Boolean expression: "true" | "false" | expr cmp_op expr
+        // Boolean expression: "true" | "false" | arith cmp_op arith
         let bool_lit = choice((
             text::keyword("true").to(BoolExpr::Lit(true)),
             text::keyword("false").to(BoolExpr::Lit(false)),
         ))
         .padded();
 
+        // For comparison, we use arith (not full expr) to avoid ambiguity
+        // But arith can contain parenthesized full expressions
         let bool_cmp = arith
             .clone()
             .then(cmp_op)
@@ -105,71 +118,13 @@ fn parser<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> {
             });
 
         if_expr.or(arith)
-    })
-}
+    });
 
-#[derive(Clone, Copy)]
-enum BoolOp {
-    Le,
-    Ge,
-    Eq,
-}
+    // Create a standalone bool_expr parser that uses the full expr parser
+    let bool_parser = {
+        let expr = expr.clone();
 
-/// Parse an expression from a string
-pub fn parse_expr(input: &str) -> Result<Expr, Vec<Rich<'_, char>>> {
-    parser().parse(input).into_result()
-}
-
-/// Parse a boolean expression from a string
-pub fn parse_bool_expr(input: &str) -> Result<BoolExpr, Vec<Rich<'_, char>>> {
-    bool_parser().parse(input).into_result()
-}
-
-fn bool_parser<'a>() -> impl Parser<'a, &'a str, BoolExpr, extra::Err<Rich<'a, char>>> {
-    recursive(|_bool_expr| {
-        // Reuse the expr parser for the comparison operands
-        let expr = recursive(|expr| {
-            let number = just('-')
-                .or_not()
-                .then(text::int(10))
-                .map(|(neg, s): (Option<_>, &str)| {
-                    let n: i64 = s.parse().unwrap();
-                    Expr::Lit(if neg.is_some() { -n } else { n })
-                })
-                .padded();
-
-            let var = text::ident()
-                .try_map(|s: &str, span| {
-                    let first = s.chars().next().unwrap();
-                    if first.is_ascii_lowercase() && !["if", "then", "else", "true", "false"].contains(&s) {
-                        Ok(Expr::Var(s.to_string()))
-                    } else {
-                        Err(Rich::custom(span, format!("'{}' is not a valid variable name", s)))
-                    }
-                })
-                .padded();
-
-            let paren = expr
-                .clone()
-                .delimited_by(just('(').padded(), just(')').padded());
-
-            let atom = number.or(paren).or(var);
-
-            atom.clone().foldl(
-                choice((just('+').to(true), just('-').to(false)))
-                    .padded()
-                    .then(atom)
-                    .repeated(),
-                |lhs, (is_add, rhs)| {
-                    if is_add {
-                        Expr::Add(Box::new(lhs), Box::new(rhs))
-                    } else {
-                        Expr::Sub(Box::new(lhs), Box::new(rhs))
-                    }
-                },
-            )
-        });
-
+        // Boolean expression using full expr for comparisons
         let bool_lit = choice((
             text::keyword("true").to(BoolExpr::Lit(true)),
             text::keyword("false").to(BoolExpr::Lit(false)),
@@ -194,7 +149,28 @@ fn bool_parser<'a>() -> impl Parser<'a, &'a str, BoolExpr, extra::Err<Rich<'a, c
             });
 
         bool_lit.or(bool_cmp)
-    })
+    };
+
+    (expr, bool_parser)
+}
+
+#[derive(Clone, Copy)]
+enum BoolOp {
+    Le,
+    Ge,
+    Eq,
+}
+
+/// Parse an expression from a string
+pub fn parse_expr(input: &str) -> Result<Expr, Vec<Rich<'_, char>>> {
+    let (expr, _) = expr_and_bool_parser();
+    expr.parse(input).into_result()
+}
+
+/// Parse a boolean expression from a string
+pub fn parse_bool_expr(input: &str) -> Result<BoolExpr, Vec<Rich<'_, char>>> {
+    let (_, bool_expr) = expr_and_bool_parser();
+    bool_expr.parse(input).into_result()
 }
 
 #[cfg(test)]
@@ -332,6 +308,26 @@ mod tests {
                     Box::new(Expr::Lit(1))
                 )),
                 Box::new(Expr::Lit(0))
+            )
+        );
+    }
+
+    #[test]
+    fn parse_bool_with_if_expr() {
+        // (if x <= 5 then x else 10) <= 7
+        let result = parse_bool_expr("(if x <= 5 then x else 10) <= 7").unwrap();
+        assert_eq!(
+            result,
+            BoolExpr::Le(
+                Box::new(Expr::If(
+                    Box::new(BoolExpr::Le(
+                        Box::new(Expr::Var("x".to_string())),
+                        Box::new(Expr::Lit(5))
+                    )),
+                    Box::new(Expr::Var("x".to_string())),
+                    Box::new(Expr::Lit(10))
+                )),
+                Box::new(Expr::Lit(7))
             )
         );
     }

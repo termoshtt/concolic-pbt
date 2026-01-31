@@ -410,7 +410,7 @@ pub fn negate_at(constraints: &[(BoolExpr, bool)], i: usize) -> Vec<(BoolExpr, b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cmp;
+    use crate::{parse_bool_expr, parse_expr};
 
     #[test]
     fn bound_basic() {
@@ -432,8 +432,7 @@ mod tests {
 
     #[test]
     fn extract_simple_le() {
-        let x = Expr::var("x");
-        let constraints = vec![(cmp!(x, <=, Expr::lit(5)), true)];
+        let constraints = vec![(parse_bool_expr("x <= 5").unwrap(), true)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(remaining.is_empty());
@@ -443,8 +442,7 @@ mod tests {
 
     #[test]
     fn extract_le_negated() {
-        let x = Expr::var("x");
-        let constraints = vec![(cmp!(x, <=, Expr::lit(5)), false)];
+        let constraints = vec![(parse_bool_expr("x <= 5").unwrap(), false)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(remaining.is_empty());
@@ -455,9 +453,8 @@ mod tests {
 
     #[test]
     fn extract_with_offset() {
-        let x = Expr::var("x");
         // x + 1 <= 5 → x <= 4
-        let constraints = vec![(cmp!(x + Expr::lit(1), <=, Expr::lit(5)), true)];
+        let constraints = vec![(parse_bool_expr("x + 1 <= 5").unwrap(), true)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(remaining.is_empty());
@@ -466,8 +463,7 @@ mod tests {
 
     #[test]
     fn extract_eq() {
-        let x = Expr::var("x");
-        let constraints = vec![(cmp!(x, ==, Expr::lit(5)), true)];
+        let constraints = vec![(parse_bool_expr("x == 5").unwrap(), true)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(remaining.is_empty());
@@ -477,8 +473,7 @@ mod tests {
 
     #[test]
     fn extract_neq() {
-        let x = Expr::var("x");
-        let constraints = vec![(cmp!(x, ==, Expr::lit(5)), false)];
+        let constraints = vec![(parse_bool_expr("x == 5").unwrap(), false)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(remaining.is_empty());
@@ -487,9 +482,7 @@ mod tests {
 
     #[test]
     fn extract_two_var_goes_to_remaining() {
-        let x = Expr::var("x");
-        let y = Expr::var("y");
-        let constraints = vec![(cmp!(x, <=, y), true)];
+        let constraints = vec![(parse_bool_expr("x <= y").unwrap(), true)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(bounds.is_empty());
@@ -498,9 +491,10 @@ mod tests {
 
     #[test]
     fn ite_goes_to_remaining() {
-        let x = Expr::var("x");
-        let expr = Expr::if_(cmp!(x.clone(), <=, Expr::lit(5)), x, Expr::lit(0));
-        let constraints = vec![(cmp!(expr, <=, Expr::lit(3)), true)];
+        let constraints = vec![(
+            parse_bool_expr("(if x <= 5 then x else 0) <= 3").unwrap(),
+            true,
+        )];
 
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
         assert!(bounds.is_empty());
@@ -510,8 +504,7 @@ mod tests {
     #[test]
     fn solver_simple() {
         // x <= 5 (true) → find x in [-1000, 5]
-        let x = Expr::var("x");
-        let constraints = vec![(cmp!(x, <=, Expr::lit(5)), true)];
+        let constraints = vec![(parse_bool_expr("x <= 5").unwrap(), true)];
 
         let mut solver = Solver::new(rand::rng(), 100);
         let env = solver.solve(&constraints).unwrap();
@@ -522,11 +515,9 @@ mod tests {
     fn solver_two_var_constraint() {
         // x <= 10 (true), x <= y (true)
         // Need to find x, y such that x <= 10 and x <= y
-        let x = Expr::var("x");
-        let y = Expr::var("y");
         let constraints = vec![
-            (cmp!(x.clone(), <=, Expr::lit(10)), true),
-            (cmp!(x, <=, y), true),
+            (parse_bool_expr("x <= 10").unwrap(), true),
+            (parse_bool_expr("x <= y").unwrap(), true),
         ];
 
         let mut solver = Solver::new(rand::rng(), 1000);
@@ -537,11 +528,10 @@ mod tests {
 
     #[test]
     fn negate_at_test() {
-        let x = Expr::var("x");
         let constraints = vec![
-            (cmp!(x.clone(), <=, Expr::lit(5)), true),
-            (cmp!(x.clone(), <=, Expr::lit(10)), true),
-            (cmp!(x, <=, Expr::lit(15)), false),
+            (parse_bool_expr("x <= 5").unwrap(), true),
+            (parse_bool_expr("x <= 10").unwrap(), true),
+            (parse_bool_expr("x <= 15").unwrap(), false),
         ];
 
         // Negate at index 1
@@ -558,12 +548,7 @@ mod tests {
 
         // Simulate: if x <= 5 then ... else ...
         // Took the then branch (x <= 5 was true)
-        let x = Expr::var("x");
-        let expr = Expr::if_(
-            cmp!(x.clone(), <=, Expr::lit(5)),
-            x + Expr::lit(1),
-            Expr::lit(0),
-        );
+        let expr = parse_expr("if x <= 5 then x + 1 else 0").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
         state.eval(&expr);
@@ -585,13 +570,10 @@ mod tests {
         // (if x <= 5 then x else 10) <= 7 : true
         // This means either (x <= 5 and x <= 7) or (x > 5 and 10 <= 7)
         // The second case is impossible (10 > 7), so x <= 5
-        let x = Expr::var("x");
-        let inner = Expr::if_(
-            cmp!(x.clone(), <=, Expr::lit(5)),
-            x,
-            Expr::lit(10),
-        );
-        let constraints = vec![(cmp!(inner, <=, Expr::lit(7)), true)];
+        let constraints = vec![(
+            parse_bool_expr("(if x <= 5 then x else 10) <= 7").unwrap(),
+            true,
+        )];
 
         let mut solver = Solver::new(rand::rng(), 1000);
         // Should find x such that (if x <= 5 then x else 10) <= 7
