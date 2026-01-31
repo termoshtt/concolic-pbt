@@ -1,9 +1,11 @@
 mod explore;
 mod node;
+mod parser;
 mod solver;
 mod state;
 
 pub use explore::{ExploreResult, Explorer};
 pub use node::{BoolExpr, Env, Expr};
+pub use parser::{parse_bool_expr, parse_expr};
 pub use solver::{extract_bounds, negate_at, Bound, Bounds, Solver, SolverError};
 pub use state::ConcolicState;

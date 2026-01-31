@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chumsky = "1.0.0-alpha.8"
 rand = "0.9"
 
 [dev-dependencies]
