@@ -16,6 +16,68 @@ One such feedback mechanism is **concolic execution** (concrete + symbolic). The
 
 This is a white-box testing technique that requires representing the program under test in an analyzable form—typically an intermediate language.
 
+## Current Implementation
+
+### Expression Language
+
+A minimal expression language with:
+
+- **Integer expressions**: literals, variables, addition, subtraction, conditional (`if-then-else`)
+- **Boolean expressions**: comparisons (`<=`, `>=`, `==`)
+
+```rust
+use concolic_pbt::{Expr, cmp};
+
+let x = Expr::var("x");
+let expr = Expr::if_(
+    cmp!(x.clone(), <=, Expr::lit(5)),
+    x.clone() + Expr::lit(1),
+    x - Expr::lit(1),
+);
+```
+
+### Concolic Execution
+
+`ConcolicState` evaluates expressions while collecting path constraints:
+
+```rust
+use concolic_pbt::ConcolicState;
+use std::collections::HashMap;
+
+let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
+let result = state.eval(&expr);  // Returns 4
+// state.constraints now contains: [(x <= 5, true)]
+```
+
+### Constraint Solver
+
+`Solver` finds inputs satisfying constraints using random sampling with rejection:
+
+- Extracts bounds from simple constraints (e.g., `x <= 5` → upper bound)
+- Handles complex constraints (including `ite`) via rejection sampling
+- No external SMT solver dependency
+
+### Path Explorer
+
+`Explorer` performs depth-first search over execution paths:
+
+```rust
+use concolic_pbt::{Explorer, Solver, ExploreResult, cmp, Expr};
+use std::collections::HashMap;
+
+let property = cmp!(Expr::var("x"), <=, Expr::lit(100));
+
+let rng = rand::rngs::StdRng::seed_from_u64(42);
+let solver = Solver::new(rng, 100);
+let mut explorer = Explorer::new(solver, 1000);
+
+match explorer.find_counterexample(&property, HashMap::from([("x".to_string(), 0)])) {
+    ExploreResult::Counterexample(env) => println!("Found: {:?}", env),
+    ExploreResult::Verified => println!("Property holds"),
+    ExploreResult::MaxIterationsReached => println!("Inconclusive"),
+}
+```
+
 ## Scope
 
 Implementing concolic execution for a real programming language is a significant undertaking. As a learning exercise, this project takes a simpler approach:
