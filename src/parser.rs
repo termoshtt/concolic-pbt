@@ -1,65 +1,104 @@
+//! Parser for the expression language
+//!
+//! # Grammar
+//!
+//! ```text
+//! expr       := if_expr | arith_expr
+//! if_expr    := "if" bool_expr "then" expr "else" expr
+//! arith_expr := term (('+' | '-') term)*
+//! term       := number | var | '(' expr ')'
+//!
+//! bool_expr  := "true" | "false" | expr cmp_op expr
+//! cmp_op     := "<=" | ">=" | "=="
+//!
+//! var        := [a-z][a-z0-9_]*
+//! number     := '-'? [0-9]+
+//! ```
+
 use chumsky::prelude::*;
 
 use crate::{BoolExpr, Expr};
 
-/// Parser for the expression language
-///
-/// Grammar:
-/// ```text
-/// expr       := if_expr | arith_expr
-/// if_expr    := "if" bool_expr "then" expr "else" expr
-/// arith_expr := term (('+' | '-') term)*
-/// term       := number | var | '(' expr ')'
-///
-/// bool_expr  := "true" | "false" | expr cmp_op expr
-/// cmp_op     := "<=" | ">=" | "=="
-///
-/// var        := [a-z][a-z0-9_]*
-/// number     := '-'? [0-9]+
-/// ```
-fn expr_and_bool_parser<'a>(
-) -> (
-    impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> + Clone,
-    impl Parser<'a, &'a str, BoolExpr, extra::Err<Rich<'a, char>>> + Clone,
-) {
-    // We need mutual recursion between expr and bool_expr
-    // Use recursive to create the expr parser, which internally creates bool_expr
-    let expr = recursive(|expr| {
-        // Number literal: optional minus followed by digits
-        let number = just('-')
-            .or_not()
-            .then(text::int(10))
-            .map(|(neg, s): (Option<_>, &str)| {
-                let n: i64 = s.parse().unwrap();
-                Expr::Lit(if neg.is_some() { -n } else { n })
-            })
-            .padded();
+#[derive(Clone, Copy)]
+enum BoolOp {
+    Le,
+    Ge,
+    Eq,
+}
 
-        // Variable: lowercase letter followed by alphanumeric/underscore
-        // Keywords are excluded by checking against reserved words
-        let var = text::ident()
-            .try_map(|s: &str, span| {
-                let first = s.chars().next().unwrap();
-                if first.is_ascii_lowercase()
-                    && !["if", "then", "else", "true", "false"].contains(&s)
-                {
-                    Ok(Expr::Var(s.to_string()))
-                } else {
-                    Err(Rich::custom(
-                        span,
-                        format!("'{}' is not a valid variable name", s),
-                    ))
-                }
-            })
-            .padded();
+/// Number literal: optional minus followed by digits
+fn number<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> + Clone {
+    just('-')
+        .or_not()
+        .then(text::int(10))
+        .map(|(neg, s): (Option<_>, &str)| {
+            let n: i64 = s.parse().unwrap();
+            Expr::Lit(if neg.is_some() { -n } else { n })
+        })
+        .padded()
+}
 
+/// Variable: lowercase letter followed by alphanumeric/underscore
+/// Keywords are excluded by checking against reserved words
+fn var<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> + Clone {
+    text::ident()
+        .try_map(|s: &str, span| {
+            let first = s.chars().next().unwrap();
+            if first.is_ascii_lowercase()
+                && !["if", "then", "else", "true", "false"].contains(&s)
+            {
+                Ok(Expr::Var(s.to_string()))
+            } else {
+                Err(Rich::custom(
+                    span,
+                    format!("'{}' is not a valid variable name", s),
+                ))
+            }
+        })
+        .padded()
+}
+
+/// Comparison operators: <=, >=, ==
+fn cmp_op<'a>() -> impl Parser<'a, &'a str, BoolOp, extra::Err<Rich<'a, char>>> + Clone {
+    choice((
+        just("<=").to(BoolOp::Le),
+        just(">=").to(BoolOp::Ge),
+        just("==").to(BoolOp::Eq),
+    ))
+    .padded()
+}
+
+/// Boolean literals: true, false
+fn bool_lit<'a>() -> impl Parser<'a, &'a str, BoolExpr, extra::Err<Rich<'a, char>>> + Clone {
+    choice((
+        text::keyword("true").to(BoolExpr::Lit(true)),
+        text::keyword("false").to(BoolExpr::Lit(false)),
+    ))
+    .padded()
+}
+
+/// Build comparison BoolExpr from operands and operator
+fn make_cmp(lhs: Expr, op: BoolOp, rhs: Expr) -> BoolExpr {
+    match op {
+        BoolOp::Le => BoolExpr::Le(Box::new(lhs), Box::new(rhs)),
+        BoolOp::Ge => BoolExpr::Ge(Box::new(lhs), Box::new(rhs)),
+        BoolOp::Eq => BoolExpr::Eq(Box::new(lhs), Box::new(rhs)),
+    }
+}
+
+/// Parser for expressions (Expr)
+///
+/// Uses recursive descent with mutual recursion between expr and bool_expr.
+/// The bool_expr inside if-then-else uses arith (not full expr) to avoid ambiguity.
+fn expr_parser<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> + Clone {
+    recursive(|expr| {
         // Parenthesized expression
         let paren = expr
             .clone()
             .delimited_by(just('(').padded(), just(')').padded());
 
         // Atomic expression (number, variable, or parenthesized)
-        let atom = number.or(paren).or(var);
+        let atom = number().or(paren).or(var());
 
         // Arithmetic: term (('+' | '-') term)*
         let arith = atom.clone().foldl(
@@ -76,34 +115,15 @@ fn expr_and_bool_parser<'a>(
             },
         );
 
-        // Comparison operators
-        let cmp_op = choice((
-            just("<=").to(BoolOp::Le),
-            just(">=").to(BoolOp::Ge),
-            just("==").to(BoolOp::Eq),
-        ))
-        .padded();
-
-        // Boolean expression: "true" | "false" | arith cmp_op arith
-        let bool_lit = choice((
-            text::keyword("true").to(BoolExpr::Lit(true)),
-            text::keyword("false").to(BoolExpr::Lit(false)),
-        ))
-        .padded();
-
-        // For comparison, we use arith (not full expr) to avoid ambiguity
+        // Boolean expression for if condition: uses arith (not full expr) to avoid ambiguity
         // But arith can contain parenthesized full expressions
         let bool_cmp = arith
             .clone()
-            .then(cmp_op)
+            .then(cmp_op())
             .then(arith.clone())
-            .map(|((lhs, op), rhs)| match op {
-                BoolOp::Le => BoolExpr::Le(Box::new(lhs), Box::new(rhs)),
-                BoolOp::Ge => BoolExpr::Ge(Box::new(lhs), Box::new(rhs)),
-                BoolOp::Eq => BoolExpr::Eq(Box::new(lhs), Box::new(rhs)),
-            });
+            .map(|((lhs, op), rhs)| make_cmp(lhs, op, rhs));
 
-        let bool_expr = bool_lit.or(bool_cmp);
+        let bool_expr = bool_lit().or(bool_cmp);
 
         // If expression: "if" bool_expr "then" expr "else" expr
         let if_expr = text::keyword("if")
@@ -118,59 +138,33 @@ fn expr_and_bool_parser<'a>(
             });
 
         if_expr.or(arith)
-    });
-
-    // Create a standalone bool_expr parser that uses the full expr parser
-    let bool_parser = {
-        let expr = expr.clone();
-
-        // Boolean expression using full expr for comparisons
-        let bool_lit = choice((
-            text::keyword("true").to(BoolExpr::Lit(true)),
-            text::keyword("false").to(BoolExpr::Lit(false)),
-        ))
-        .padded();
-
-        let cmp_op = choice((
-            just("<=").to(BoolOp::Le),
-            just(">=").to(BoolOp::Ge),
-            just("==").to(BoolOp::Eq),
-        ))
-        .padded();
-
-        let bool_cmp = expr
-            .clone()
-            .then(cmp_op)
-            .then(expr)
-            .map(|((lhs, op), rhs)| match op {
-                BoolOp::Le => BoolExpr::Le(Box::new(lhs), Box::new(rhs)),
-                BoolOp::Ge => BoolExpr::Ge(Box::new(lhs), Box::new(rhs)),
-                BoolOp::Eq => BoolExpr::Eq(Box::new(lhs), Box::new(rhs)),
-            });
-
-        bool_lit.or(bool_cmp)
-    };
-
-    (expr, bool_parser)
+    })
 }
 
-#[derive(Clone, Copy)]
-enum BoolOp {
-    Le,
-    Ge,
-    Eq,
+/// Parser for boolean expressions (BoolExpr)
+///
+/// This parser accepts full expressions (including if-then-else) as comparison operands.
+fn bool_expr_parser<'a>() -> impl Parser<'a, &'a str, BoolExpr, extra::Err<Rich<'a, char>>> + Clone
+{
+    let expr = expr_parser();
+
+    let bool_cmp = expr
+        .clone()
+        .then(cmp_op())
+        .then(expr)
+        .map(|((lhs, op), rhs)| make_cmp(lhs, op, rhs));
+
+    bool_lit().or(bool_cmp)
 }
 
 /// Parse an expression from a string
 pub fn parse_expr(input: &str) -> Result<Expr, Vec<Rich<'_, char>>> {
-    let (expr, _) = expr_and_bool_parser();
-    expr.parse(input).into_result()
+    expr_parser().parse(input).into_result()
 }
 
 /// Parse a boolean expression from a string
 pub fn parse_bool_expr(input: &str) -> Result<BoolExpr, Vec<Rich<'_, char>>> {
-    let (_, bool_expr) = expr_and_bool_parser();
-    bool_expr.parse(input).into_result()
+    bool_expr_parser().parse(input).into_result()
 }
 
 #[cfg(test)]
