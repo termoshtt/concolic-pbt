@@ -68,7 +68,7 @@ impl Explorer {
         initial_env: Env,
         rng: &mut impl rand::Rng,
     ) -> ExploreResult {
-        self.explore_dfs(property, initial_env, rng)
+        self.explore_dfs(property, initial_env, rng, 0)
     }
 
     fn explore_dfs(
@@ -76,6 +76,7 @@ impl Explorer {
         property: &BoolExpr,
         env: Env,
         rng: &mut impl rand::Rng,
+        min_index: usize,
     ) -> ExploreResult {
         if self.iterations >= self.max_iterations {
             return ExploreResult::MaxIterationsReached;
@@ -106,28 +107,23 @@ impl Explorer {
         self.visited.push((path.clone(), env));
 
         // Try to explore alternative paths (depth-first: start from last constraint)
-        // This includes negating the property itself (last constraint)
-        for i in (0..state.constraints.len()).rev() {
-            let mut alt_path = path[..i].to_vec();
-            alt_path.push(!path[i]);
-
-            // Skip if this alternative path prefix was already visited
-            // (the actual path taken may differ from alt_path due to solver limitations)
-            if self.visited.iter().any(|(p, _)| p.starts_with(&alt_path)) {
-                continue;
-            }
-
+        // Only negate constraints at index >= min_index (earlier ones are handled by parent)
+        for i in (min_index..state.constraints.len()).rev() {
             // Try to find an input for the alternative path
             match find_alternative(&state, i, rng, self.max_solver_attempts) {
                 Ok(new_env) => {
-                    let result = self.explore_dfs(property, new_env, rng);
+                    // Recurse with i+1 as the new min_index
+                    // Child should not negate constraints at or before index i
+                    // (negating at i would bring us back to the parent's path prefix)
+                    let result = self.explore_dfs(property, new_env, rng, i + 1);
                     if matches!(result, ExploreResult::Counterexample(_) | ExploreResult::MaxIterationsReached) {
                         return result;
                     }
                 }
                 Err(_) => {
                     // Couldn't find input (unsatisfiable or max attempts exceeded)
-                    // Record as unreached for transparency
+                    let mut alt_path = path[..i].to_vec();
+                    alt_path.push(!path[i]);
                     self.unreached.push(alt_path);
                 }
             }
