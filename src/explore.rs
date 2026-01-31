@@ -284,4 +284,48 @@ mod tests {
           Path: FF
         "#);
     }
+
+    #[test]
+    fn path_length_changes_on_alternative() {
+        // Property: (if x <= 5 then 1 else (if x >= 10 then 2 else 3)) >= 1
+        //
+        // When x <= 5 (then branch): result = 1, no inner branch
+        //   Path: [T, T] (x<=5, result>=1)
+        //
+        // When x > 5 (else branch): inner branch on x >= 10 exists
+        //   Path: [F, T, T] or [F, F, T] (x<=5, x>=10, result>=1)
+        //
+        // This demonstrates that negating at index 0 can lead to a longer path.
+        let x = Expr::var("x");
+        let inner = Expr::if_(
+            cmp!(x.clone(), >=, Expr::lit(10)),
+            Expr::lit(2),
+            Expr::lit(3),
+        );
+        let property = Expr::if_(cmp!(x, <=, Expr::lit(5)), Expr::lit(1), inner).ge(Expr::lit(1));
+
+        let rng = rand::rngs::StdRng::seed_from_u64(42);
+        let solver = Solver::new(rng, 100);
+        let mut explorer = Explorer::new(solver, 100);
+        let initial_env = HashMap::from([("x".to_string(), 3)]);
+
+        let result = explorer.find_counterexample(&property, initial_env);
+
+        assert_eq!(result, ExploreResult::Verified);
+        // TT has length 2, while FTT and FFT have length 3
+        insta::assert_snapshot!(explorer, @r#"
+        Reached:
+          Path: TT
+          Env: x = 3
+          Path: FTT
+          Env: x = 149
+          Path: FFT
+          Env: x = 8
+
+        Unreached:
+          Path: TF
+          Path: FTF
+          Path: FFF
+        "#);
+    }
 }

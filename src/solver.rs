@@ -385,12 +385,16 @@ fn collect_variables_bool(expr: &BoolExpr, vars: &mut Vec<String>) {
 /// if cond0 {           // T
 ///   if cond1 {         // T
 ///     if cond2 {       // F (we negate this to T)
-///       if cond3 { }   // F (this branch may not exist when cond2 is T)
+///       // then branch: no more branches here
+///     } else {
+///       if cond3 { }   // F (only exists in else branch of cond2)
 ///     }
 ///   }
 /// }
 /// ```
 ///
+/// When cond2 is F, we take the else branch and encounter cond3.
+/// When cond2 is T (negated), we take the then branch and cond3 doesn't exist.
 /// By only requiring `[T, T, T]`, we let the solver find any input satisfying
 /// these constraints, and the actual execution determines what happens next.
 pub fn negate_at(constraints: &[(BoolExpr, bool)], i: usize) -> Vec<(BoolExpr, bool)> {
