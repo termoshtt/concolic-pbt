@@ -223,10 +223,8 @@ mod tests {
         .unwrap();
 
         // x = 2, y = -1: inner_inner = 2+5 = 7, inner = 7, 7 <= 3 is false, result = 0
-        let mut state = ConcolicState::new(HashMap::from([
-            ("x".to_string(), 2),
-            ("y".to_string(), -1),
-        ]));
+        let mut state =
+            ConcolicState::new(HashMap::from([("x".to_string(), 2), ("y".to_string(), -1)]));
         insta::assert_snapshot!(state.eval(&expr), @"0");
         insta::assert_snapshot!(state, @r###"
         Env: x = 2, y = -1
@@ -239,13 +237,10 @@ mod tests {
 
     #[test]
     fn display_state() {
-        let expr =
-            parse_expr("if x + 1 <= 5 then (if y <= x + 2 then y else 0) else -1").unwrap();
+        let expr = parse_expr("if x + 1 <= 5 then (if y <= x + 2 then y else 0) else -1").unwrap();
 
-        let mut state = ConcolicState::new(HashMap::from([
-            ("x".to_string(), 3),
-            ("y".to_string(), 4),
-        ]));
+        let mut state =
+            ConcolicState::new(HashMap::from([("x".to_string(), 3), ("y".to_string(), 4)]));
         state.eval(&expr);
 
         insta::assert_snapshot!(state, @r###"

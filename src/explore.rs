@@ -18,9 +18,7 @@ pub type Path = Vec<bool>;
 
 /// Format path as string of T/F
 fn format_path(path: &Path) -> String {
-    path.iter()
-        .map(|b| if *b { 'T' } else { 'F' })
-        .collect()
+    path.iter().map(|b| if *b { 'T' } else { 'F' }).collect()
 }
 
 /// Format env as "x = 1, y = 2"
@@ -66,12 +64,7 @@ impl<R: rand::Rng> Explorer<R> {
         self.explore_dfs(property, initial_env, 0)
     }
 
-    fn explore_dfs(
-        &mut self,
-        property: &BoolExpr,
-        env: Env,
-        min_index: usize,
-    ) -> ExploreResult {
+    fn explore_dfs(&mut self, property: &BoolExpr, env: Env, min_index: usize) -> ExploreResult {
         if self.iterations >= self.max_iterations {
             return ExploreResult::MaxIterationsReached;
         }
@@ -83,7 +76,11 @@ impl<R: rand::Rng> Explorer<R> {
         let property_holds = state.eval_bool(property);
 
         // Extract current path
-        let path: Path = state.path_constraints.iter().map(|(_, taken)| *taken).collect();
+        let path: Path = state
+            .path_constraints
+            .iter()
+            .map(|(_, taken)| *taken)
+            .collect();
 
         // Check if property is violated
         if !property_holds {
@@ -110,7 +107,10 @@ impl<R: rand::Rng> Explorer<R> {
                     // Child should not negate constraints at or before index i
                     // (negating at i would bring us back to the parent's path prefix)
                     let result = self.explore_dfs(property, new_env, i + 1);
-                    if matches!(result, ExploreResult::Counterexample(_) | ExploreResult::MaxIterationsReached) {
+                    if matches!(
+                        result,
+                        ExploreResult::Counterexample(_) | ExploreResult::MaxIterationsReached
+                    ) {
                         return result;
                     }
                 }

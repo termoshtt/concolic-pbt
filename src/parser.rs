@@ -44,9 +44,7 @@ fn var<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> + Clo
     text::ident()
         .try_map(|s: &str, span| {
             let first = s.chars().next().unwrap();
-            if first.is_ascii_lowercase()
-                && !["if", "then", "else", "true", "false"].contains(&s)
-            {
+            if first.is_ascii_lowercase() && !["if", "then", "else", "true", "false"].contains(&s) {
                 Ok(Expr::Var(s.to_string()))
             } else {
                 Err(Rich::custom(
@@ -214,10 +212,7 @@ mod tests {
         assert_eq!(parse_expr("(42)").unwrap(), Expr::Lit(42));
         assert_eq!(
             parse_expr("(x + 1)").unwrap(),
-            Expr::Add(
-                Box::new(Expr::Var("x".to_string())),
-                Box::new(Expr::Lit(1))
-            )
+            Expr::Add(Box::new(Expr::Var("x".to_string())), Box::new(Expr::Lit(1)))
         );
     }
 
