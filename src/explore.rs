@@ -83,7 +83,7 @@ impl<R: rand::Rng> Explorer<R> {
         let property_holds = state.eval_bool(property);
 
         // Extract current path
-        let path: Path = state.constraints.iter().map(|(_, taken)| *taken).collect();
+        let path: Path = state.path_constraints.iter().map(|(_, taken)| *taken).collect();
 
         // Check if property is violated
         if !property_holds {
@@ -102,7 +102,7 @@ impl<R: rand::Rng> Explorer<R> {
 
         // Try to explore alternative paths (depth-first: start from last constraint)
         // Only negate constraints at index >= min_index (earlier ones are handled by parent)
-        for i in (min_index..state.constraints.len()).rev() {
+        for i in (min_index..state.path_constraints.len()).rev() {
             // Try to find an input for the alternative path
             match self.solver.find_alternative(&state, i) {
                 Ok(new_env) => {

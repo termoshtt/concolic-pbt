@@ -2,20 +2,44 @@ use std::fmt;
 
 use crate::{BoolExpr, Env, Expr};
 
+/// Oracle failure types
+///
+/// These represent failures detected by oracles (assertions, invariants, etc.)
+/// that are separate from path constraints used for exploration.
+///
+/// Path constraints: conditions from if-then-else branches (used for path exploration)
+/// Oracle failures: property violations (used for bug detection)
+#[derive(Debug, Clone, PartialEq)]
+pub enum OracleFailure {
+    /// Assertion failure (property evaluated to false)
+    AssertionFailed {
+        /// The boolean expression that failed
+        expr: BoolExpr,
+    },
+    // Future extensions:
+    // NaN { tensor: String },
+    // Inf { tensor: String },
+    // AllCloseFailed { lhs: String, rhs: String, atol: f64, rtol: f64 },
+    // ShapeMismatch { expected: Vec<usize>, actual: Vec<usize> },
+}
+
 /// State for concolic execution
 #[derive(Debug, Clone)]
 pub struct ConcolicState {
     /// Concrete values for variables
     pub env: Env,
     /// Collected path constraints (with the branch direction taken)
-    pub constraints: Vec<(BoolExpr, bool)>,
+    ///
+    /// These are conditions from if-then-else branches encountered during execution.
+    /// Separate from oracle failures (assertion failures, NaN/Inf, etc.)
+    pub path_constraints: Vec<(BoolExpr, bool)>,
 }
 
 impl ConcolicState {
     pub fn new(env: Env) -> Self {
         Self {
             env,
-            constraints: Vec::new(),
+            path_constraints: Vec::new(),
         }
     }
 
@@ -45,7 +69,7 @@ impl ConcolicState {
             BoolExpr::Ge(l, r) => self.eval(l) >= self.eval(r),
             BoolExpr::Eq(l, r) => self.eval(l) == self.eval(r),
         };
-        self.constraints.push((expr.clone(), result));
+        self.path_constraints.push((expr.clone(), result));
         result
     }
 
@@ -89,9 +113,9 @@ impl fmt::Display for ConcolicState {
         }
         writeln!(f)?;
 
-        // Constraints
-        writeln!(f, "Constraints:")?;
-        for (expr, taken) in &self.constraints {
+        // Path constraints
+        writeln!(f, "Path constraints:")?;
+        for (expr, taken) in &self.path_constraints {
             writeln!(f, "  {} : {}", self.format_bool_expr(expr), taken)?;
         }
         Ok(())
@@ -110,10 +134,10 @@ mod tests {
         let expr = parse_expr("x + 1").unwrap();
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
         insta::assert_snapshot!(state.eval(&expr), @"6");
-        insta::assert_snapshot!(state, @r#"
+        insta::assert_snapshot!(state, @r###"
         Env: x = 5
-        Constraints:
-        "#);
+        Path constraints:
+        "###);
     }
 
     #[test]
@@ -122,11 +146,11 @@ mod tests {
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
         insta::assert_snapshot!(state.eval(&expr), @"6");
-        insta::assert_snapshot!(state, @r#"
+        insta::assert_snapshot!(state, @r###"
         Env: x = 5
-        Constraints:
+        Path constraints:
           x [=5] <= 10 : true
-        "#);
+        "###);
     }
 
     #[test]
@@ -135,11 +159,11 @@ mod tests {
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 15)]));
         insta::assert_snapshot!(state.eval(&expr), @"0");
-        insta::assert_snapshot!(state, @r#"
+        insta::assert_snapshot!(state, @r###"
         Env: x = 15
-        Constraints:
+        Path constraints:
           x [=15] <= 10 : false
-        "#);
+        "###);
     }
 
     #[test]
@@ -152,7 +176,7 @@ mod tests {
         insta::assert_snapshot!(state.eval_bool(&cond), @"true");
         insta::assert_snapshot!(state, @r###"
         Env: x = 3
-        Constraints:
+        Path constraints:
           x [=3] <= 5 : true
           ite(x <= 5, x, 10) [=3] <= 7 : true
         "###);
@@ -168,7 +192,7 @@ mod tests {
         insta::assert_snapshot!(state.eval_bool(&cond), @"false");
         insta::assert_snapshot!(state, @r###"
         Env: x = 8
-        Constraints:
+        Path constraints:
           x [=8] <= 5 : false
           ite(x <= 5, x, 10) [=10] <= 7 : false
         "###);
@@ -182,12 +206,12 @@ mod tests {
         // x = 2: inner = 2 + 5 = 7, 7 <= 3 is false, result = 0
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 2)]));
         insta::assert_snapshot!(state.eval(&expr), @"0");
-        insta::assert_snapshot!(state, @r#"
+        insta::assert_snapshot!(state, @r###"
         Env: x = 2
-        Constraints:
+        Path constraints:
           x [=2] <= 5 : true
           ite(x <= 5, x + 5, x - 5) [=7] <= 3 : false
-        "#);
+        "###);
     }
 
     #[test]
@@ -204,13 +228,13 @@ mod tests {
             ("y".to_string(), -1),
         ]));
         insta::assert_snapshot!(state.eval(&expr), @"0");
-        insta::assert_snapshot!(state, @r#"
+        insta::assert_snapshot!(state, @r###"
         Env: x = 2, y = -1
-        Constraints:
+        Path constraints:
           x [=2] <= 5 : true
           y [=-1] <= 0 : true
           ite(x <= 5, ite(y <= 0, x + 5, x + 6), x - 5) [=7] <= 3 : false
-        "#);
+        "###);
     }
 
     #[test]
@@ -224,11 +248,11 @@ mod tests {
         ]));
         state.eval(&expr);
 
-        insta::assert_snapshot!(state, @r#"
+        insta::assert_snapshot!(state, @r###"
         Env: x = 3, y = 4
-        Constraints:
+        Path constraints:
           x + 1 [=4] <= 5 : true
           y [=4] <= x + 2 [=5] : true
-        "#);
+        "###);
     }
 }
