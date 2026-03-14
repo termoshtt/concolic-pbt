@@ -187,32 +187,36 @@ pub fn parse_bool_expr(input: &str) -> Result<BoolExpr, Vec<Rich<'_, char>>> {
 
 /// Parser for statements (Stmt)
 fn stmt_parser<'a>() -> impl Parser<'a, &'a str, Stmt, extra::Err<Rich<'a, char>>> + Clone {
-    recursive(|stmt| {
-        let expr = expr_parser();
-        let bool_expr = bool_expr_parser();
+    let expr = expr_parser();
+    let bool_expr = bool_expr_parser();
 
-        // let statement: let x = expr
-        let let_stmt = text::keyword("let")
-            .padded()
-            .ignore_then(var_name())
-            .then_ignore(just('=').padded())
-            .then(expr)
-            .map(|(name, expr)| Stmt::Let { name, expr });
+    // let statement: let x = expr
+    let let_stmt = text::keyword("let")
+        .padded()
+        .ignore_then(var_name())
+        .then_ignore(just('=').padded())
+        .then(expr)
+        .map(|(name, expr)| Stmt::Let { name, expr });
 
-        // assert statement: assert(bool_expr)
-        let assert_stmt = text::keyword("assert")
-            .padded()
-            .ignore_then(bool_expr.delimited_by(just('(').padded(), just(')').padded()))
-            .map(|expr| Stmt::Assert { expr });
+    // assert statement: assert(bool_expr)
+    let assert_stmt = text::keyword("assert")
+        .padded()
+        .ignore_then(bool_expr.delimited_by(just('(').padded(), just(')').padded()))
+        .map(|expr| Stmt::Assert { expr });
 
-        let atom = let_stmt.or(assert_stmt);
+    let atom = let_stmt.or(assert_stmt);
 
-        // Sequence: stmt; stmt (right-associative via recursive)
-        atom.clone().foldl(
-            just(';').padded().ignore_then(stmt).repeated(),
-            |first, second| Stmt::Seq(Box::new(first), Box::new(second)),
-        )
-    })
+    // Sequence: collect statements separated by semicolons
+    atom.separated_by(just(';').padded())
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .map(|stmts| {
+            if stmts.len() == 1 {
+                stmts.into_iter().next().unwrap()
+            } else {
+                Stmt::Seq(stmts)
+            }
+        })
 }
 
 /// Parse a statement from a string
@@ -422,21 +426,21 @@ mod tests {
         let result = parse_stmt("let y = x + 1; assert(y <= 10)").unwrap();
         assert_eq!(
             result,
-            Stmt::Seq(
-                Box::new(Stmt::Let {
+            Stmt::Seq(vec![
+                Stmt::Let {
                     name: "y".to_string(),
                     expr: Expr::Add(
                         Box::new(Expr::Var("x".to_string())),
                         Box::new(Expr::Lit(1))
                     )
-                }),
-                Box::new(Stmt::Assert {
+                },
+                Stmt::Assert {
                     expr: BoolExpr::Le(
                         Box::new(Expr::Var("y".to_string())),
                         Box::new(Expr::Lit(10))
                     )
-                })
-            )
+                }
+            ])
         );
     }
 

@@ -40,8 +40,8 @@ pub enum Stmt {
     Let { name: String, expr: Expr },
     /// Assertion: assert(bool_expr)
     Assert { expr: BoolExpr },
-    /// Sequence: stmt; stmt
-    Seq(Box<Stmt>, Box<Stmt>),
+    /// Sequence of statements
+    Seq(Vec<Stmt>),
 }
 
 impl Expr {
@@ -155,7 +155,15 @@ impl fmt::Display for Stmt {
         match self {
             Stmt::Let { name, expr } => write!(f, "let {} = {}", name, expr),
             Stmt::Assert { expr } => write!(f, "assert({})", expr),
-            Stmt::Seq(first, second) => write!(f, "{}; {}", first, second),
+            Stmt::Seq(stmts) => {
+                for (i, stmt) in stmts.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, "; ")?;
+                    }
+                    write!(f, "{}", stmt)?;
+                }
+                Ok(())
+            }
         }
     }
 }

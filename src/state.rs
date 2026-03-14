@@ -103,9 +103,11 @@ impl ConcolicState {
                     Err(OracleFailure::AssertionFailed { expr: expr.clone() })
                 }
             }
-            Stmt::Seq(first, second) => {
-                self.exec_stmt(first)?;
-                self.exec_stmt(second)
+            Stmt::Seq(stmts) => {
+                for stmt in stmts {
+                    self.exec_stmt(stmt)?;
+                }
+                Ok(())
             }
         }
     }
