@@ -536,8 +536,8 @@ mod tests {
         // Negate at index 1
         let negated = negate_at(&constraints, 1);
         assert_eq!(negated.len(), 2);
-        assert_eq!(negated[0].1, true); // First unchanged
-        assert_eq!(negated[1].1, false); // Second negated
+        assert!(negated[0].1); // First unchanged
+        assert!(!negated[1].1); // Second negated
     }
 
     #[test]
@@ -554,7 +554,7 @@ mod tests {
 
         // Should have constraint: x <= 5 : true
         assert_eq!(state.constraints.len(), 1);
-        assert_eq!(state.constraints[0].1, true);
+        assert!(state.constraints[0].1);
 
         // Find alternative (negate the constraint)
         let mut solver = Solver::new(rand::rng(), 100);
