@@ -425,7 +425,8 @@ mod tests {
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
 
-        let result = explorer.find_counterexample_stmts(&stmts, HashMap::from([("x".to_string(), 3)]));
+        let result =
+            explorer.find_counterexample_stmts(&stmts, HashMap::from([("x".to_string(), 3)]));
         assert!(matches!(result, ExploreResult::Counterexample { .. }));
     }
 
@@ -439,7 +440,8 @@ mod tests {
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
 
-        let result = explorer.find_counterexample_stmts(&stmts, HashMap::from([("x".to_string(), 3)]));
+        let result =
+            explorer.find_counterexample_stmts(&stmts, HashMap::from([("x".to_string(), 3)]));
         assert_eq!(result, ExploreResult::Verified);
     }
 
@@ -453,7 +455,8 @@ mod tests {
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
 
-        let result = explorer.find_counterexample_stmts(&stmts, HashMap::from([("x".to_string(), 0)]));
+        let result =
+            explorer.find_counterexample_stmts(&stmts, HashMap::from([("x".to_string(), 0)]));
         assert_eq!(result, ExploreResult::Verified);
     }
 }

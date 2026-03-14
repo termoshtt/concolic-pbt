@@ -396,10 +396,7 @@ mod tests {
             result,
             Stmts(vec![Stmt::Let {
                 name: "y".to_string(),
-                expr: Expr::Add(
-                    Box::new(Expr::Var("x".to_string())),
-                    Box::new(Expr::Lit(1))
-                )
+                expr: Expr::Add(Box::new(Expr::Var("x".to_string())), Box::new(Expr::Lit(1)))
             }])
         );
     }
@@ -426,10 +423,7 @@ mod tests {
             Stmts(vec![
                 Stmt::Let {
                     name: "y".to_string(),
-                    expr: Expr::Add(
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Lit(1))
-                    )
+                    expr: Expr::Add(Box::new(Expr::Var("x".to_string())), Box::new(Expr::Lit(1)))
                 },
                 Stmt::Assert {
                     expr: BoolExpr::Le(
