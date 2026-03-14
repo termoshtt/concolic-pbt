@@ -93,9 +93,10 @@ let mut explorer = Explorer::new(solver, 1000);
 // Start with x = 3 (takes the then-branch, satisfies property)
 // Explorer will automatically explore the else-branch and find x > 11
 match explorer.find_counterexample(&property, HashMap::from([("x".to_string(), 3)])) {
-    ExploreResult::Counterexample(env) => {
+    ExploreResult::Counterexample { env, failures } => {
         // Found: x = 149 (or some value > 11)
-        println!("Counterexample: {:?}", env);
+        // failures contains AssertionFailed for the property
+        println!("Counterexample: {:?}, failures: {:?}", env, failures);
     }
     ExploreResult::Verified => println!("Property holds for all paths"),
     ExploreResult::MaxIterationsReached => println!("Inconclusive"),

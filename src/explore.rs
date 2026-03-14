@@ -1,12 +1,17 @@
 use std::fmt;
 
-use crate::{BoolExpr, ConcolicState, Env, Solver};
+use crate::{BoolExpr, ConcolicState, Env, OracleFailure, Solver};
 
 /// Result of exploration
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExploreResult {
     /// Found an input that violates the property
-    Counterexample(Env),
+    Counterexample {
+        /// The input that caused the failure
+        env: Env,
+        /// Oracle failures detected (e.g., assertion failures)
+        failures: Vec<OracleFailure>,
+    },
     /// Explored all reachable paths, property holds
     Verified,
     /// Reached maximum iterations without conclusive result
@@ -70,10 +75,11 @@ impl<R: rand::Rng> Explorer<R> {
         }
         self.iterations += 1;
 
-        // Evaluate property with current env, collecting constraints
-        // eval_bool records the property itself as a constraint
+        // Evaluate property with current env, collecting path constraints
+        // eval_bool_pure does NOT record the property itself (it's an assertion, not a path constraint)
+        // but internal branch conditions (from if-then-else) ARE recorded via eval()
         let mut state = ConcolicState::new(env.clone());
-        let property_holds = state.eval_bool(property);
+        let property_holds = state.eval_bool_pure(property);
 
         // Extract current path
         let path: Path = state
@@ -84,7 +90,14 @@ impl<R: rand::Rng> Explorer<R> {
 
         // Check if property is violated
         if !property_holds {
-            return ExploreResult::Counterexample(env);
+            // Record assertion failure: find_counterexample(f) implicitly means assert(f)
+            state
+                .oracle_failures
+                .push(OracleFailure::AssertionFailed { expr: property.clone() });
+            return ExploreResult::Counterexample {
+                env,
+                failures: state.oracle_failures,
+            };
         }
 
         // Should never visit the same path twice (exploration strategy guarantees this)
@@ -96,6 +109,27 @@ impl<R: rand::Rng> Explorer<R> {
 
         // Mark this path as visited
         self.visited.push((path.clone(), env));
+
+        // Try to find assertion failure on this path:
+        // Solve: path_constraints AND NOT(property)
+        if let Ok(new_env) = self
+            .solver
+            .find_assertion_failure(&state.path_constraints, property)
+        {
+            // Found a counterexample on this path
+            let mut new_state = ConcolicState::new(new_env.clone());
+            let new_property_holds = new_state.eval_bool_pure(property);
+            if !new_property_holds {
+                new_state
+                    .oracle_failures
+                    .push(OracleFailure::AssertionFailed { expr: property.clone() });
+                return ExploreResult::Counterexample {
+                    env: new_env,
+                    failures: new_state.oracle_failures,
+                };
+            }
+            // If property still holds (solver gave bad input), continue exploration
+        }
 
         // Try to explore alternative paths (depth-first: start from last constraint)
         // Only negate constraints at index >= min_index (earlier ones are handled by parent)
@@ -109,7 +143,7 @@ impl<R: rand::Rng> Explorer<R> {
                     let result = self.explore_dfs(property, new_env, i + 1);
                     if matches!(
                         result,
-                        ExploreResult::Counterexample(_) | ExploreResult::MaxIterationsReached
+                        ExploreResult::Counterexample { .. } | ExploreResult::MaxIterationsReached
                     ) {
                         return result;
                     }
@@ -182,10 +216,10 @@ mod tests {
 
         let result = explorer.find_counterexample(&property, initial_env);
 
-        assert!(matches!(result, ExploreResult::Counterexample(_)));
+        assert!(matches!(result, ExploreResult::Counterexample { .. }));
         insta::assert_snapshot!(explorer, @r###"
         Reached:
-          Path: T
+          Path: 
           Env: x = 5
         "###);
     }
@@ -205,11 +239,8 @@ mod tests {
         assert_eq!(result, ExploreResult::Verified);
         insta::assert_snapshot!(explorer, @r###"
         Reached:
-          Path: T
+          Path: 
           Env: x = 5
-
-        Unreached:
-          Path: F
         "###);
     }
 
@@ -227,14 +258,11 @@ mod tests {
         let result = explorer.find_counterexample(&property, initial_env);
 
         // Should find counterexample: x > 5 and x - 1 > 10, so x > 11
-        assert!(matches!(result, ExploreResult::Counterexample(_)));
+        assert!(matches!(result, ExploreResult::Counterexample { .. }));
         insta::assert_snapshot!(explorer, @r###"
         Reached:
-          Path: TT
+          Path: T
           Env: x = 3
-
-        Unreached:
-          Path: TF
         "###);
     }
 
@@ -253,18 +281,16 @@ mod tests {
         let result = explorer.find_counterexample(&property, initial_env);
 
         assert_eq!(result, ExploreResult::Verified);
-        insta::assert_snapshot!(explorer, @r#"
+        insta::assert_snapshot!(explorer, @r###"
         Reached:
-          Path: TFT
+          Path: TF
           Env: x = 3
-          Path: FT
+          Path: F
           Env: x = 149
 
         Unreached:
-          Path: TFF
           Path: TT
-          Path: FF
-        "#);
+        "###);
     }
 
     #[test]
@@ -290,19 +316,14 @@ mod tests {
 
         assert_eq!(result, ExploreResult::Verified);
         // TT has length 2, while FTT and FFT have length 3
-        insta::assert_snapshot!(explorer, @r#"
+        insta::assert_snapshot!(explorer, @r###"
         Reached:
-          Path: TT
+          Path: T
           Env: x = 3
-          Path: FTT
+          Path: FT
           Env: x = 149
-          Path: FFT
+          Path: FF
           Env: x = 8
-
-        Unreached:
-          Path: TF
-          Path: FTF
-          Path: FFF
-        "#);
+        "###);
     }
 }

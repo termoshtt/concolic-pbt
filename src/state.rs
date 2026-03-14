@@ -4,15 +4,22 @@ use crate::{BoolExpr, Env, Expr};
 
 /// Oracle failure types
 ///
-/// These represent failures detected during evaluation (NaN, Inf, assertion failures, etc.)
+/// These represent failures detected during evaluation (assertion failures, NaN, Inf, etc.)
 /// that are separate from path constraints used for exploration.
 ///
 /// - Path constraints: conditions from if-then-else branches (used for path exploration)
-/// - Oracle failures: runtime errors detected during evaluation (used for bug detection)
+/// - Oracle failures: property violations detected during evaluation (used for bug detection)
 #[derive(Debug, Clone, PartialEq)]
 pub enum OracleFailure {
-    // TODO: Add variants when Stmt (assert) is added to the language
-    // AssertionFailed { expr: BoolExpr },
+    /// Assertion failure (property evaluated to false)
+    ///
+    /// Currently, `find_counterexample(f)` implicitly treats `f: BoolExpr` as `assert(f)`.
+    /// When `Stmt` is added to the language, this will correspond to explicit assert statements.
+    AssertionFailed {
+        /// The boolean expression that was asserted and evaluated to false
+        expr: BoolExpr,
+    },
+    // Future extensions:
     // NaN { tensor: String },
     // Inf { tensor: String },
 }
@@ -27,6 +34,8 @@ pub struct ConcolicState {
     /// These are conditions from if-then-else branches encountered during execution.
     /// Separate from oracle failures (assertion failures, NaN/Inf, etc.)
     pub path_constraints: Vec<(BoolExpr, bool)>,
+    /// Oracle failures detected during evaluation
+    pub oracle_failures: Vec<OracleFailure>,
 }
 
 impl ConcolicState {
@@ -34,6 +43,7 @@ impl ConcolicState {
         Self {
             env,
             path_constraints: Vec::new(),
+            oracle_failures: Vec::new(),
         }
     }
 
@@ -55,16 +65,30 @@ impl ConcolicState {
         }
     }
 
-    /// Evaluate a boolean expression and record it as a constraint
+    /// Evaluate a boolean expression and record it as a path constraint
+    ///
+    /// Used for branch conditions (if-then-else). The condition is recorded
+    /// in path_constraints for path exploration.
     pub fn eval_bool(&mut self, expr: &BoolExpr) -> bool {
-        let result = match expr {
-            BoolExpr::Lit(b) => return *b, // Literals are constants, no constraint
+        let result = self.eval_bool_pure(expr);
+        if !matches!(expr, BoolExpr::Lit(_)) {
+            self.path_constraints.push((expr.clone(), result));
+        }
+        result
+    }
+
+    /// Evaluate a boolean expression without recording it as a path constraint
+    ///
+    /// Used for assertion evaluation. The expression itself is not recorded,
+    /// but any internal branch conditions (from if-then-else in subexpressions)
+    /// are still recorded via eval().
+    pub fn eval_bool_pure(&mut self, expr: &BoolExpr) -> bool {
+        match expr {
+            BoolExpr::Lit(b) => *b,
             BoolExpr::Le(l, r) => self.eval(l) <= self.eval(r),
             BoolExpr::Ge(l, r) => self.eval(l) >= self.eval(r),
             BoolExpr::Eq(l, r) => self.eval(l) == self.eval(r),
-        };
-        self.path_constraints.push((expr.clone(), result));
-        result
+        }
     }
 
     /// Format an expression with its concrete value: "x + 1 [=4]"
@@ -111,6 +135,18 @@ impl fmt::Display for ConcolicState {
         writeln!(f, "Path constraints:")?;
         for (expr, taken) in &self.path_constraints {
             writeln!(f, "  {} : {}", self.format_bool_expr(expr), taken)?;
+        }
+
+        // Oracle failures
+        if !self.oracle_failures.is_empty() {
+            writeln!(f, "Oracle failures:")?;
+            for failure in &self.oracle_failures {
+                match failure {
+                    OracleFailure::AssertionFailed { expr } => {
+                        writeln!(f, "  assert({}) failed", self.format_bool_expr(expr))?;
+                    }
+                }
+            }
         }
         Ok(())
     }
