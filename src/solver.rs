@@ -406,7 +406,6 @@ pub fn negate_at(constraints: &[(BoolExpr, bool)], i: usize) -> Vec<(BoolExpr, b
     result
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
