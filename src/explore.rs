@@ -91,9 +91,9 @@ impl<R: rand::Rng> Explorer<R> {
         // Check if property is violated
         if !property_holds {
             // Record assertion failure: find_counterexample(f) implicitly means assert(f)
-            state
-                .oracle_failures
-                .push(OracleFailure::AssertionFailed { expr: property.clone() });
+            state.oracle_failures.push(OracleFailure::AssertionFailed {
+                expr: property.clone(),
+            });
             return ExploreResult::Counterexample {
                 env,
                 failures: state.oracle_failures,
@@ -122,7 +122,9 @@ impl<R: rand::Rng> Explorer<R> {
             if !new_property_holds {
                 new_state
                     .oracle_failures
-                    .push(OracleFailure::AssertionFailed { expr: property.clone() });
+                    .push(OracleFailure::AssertionFailed {
+                        expr: property.clone(),
+                    });
                 return ExploreResult::Counterexample {
                     env: new_env,
                     failures: new_state.oracle_failures,

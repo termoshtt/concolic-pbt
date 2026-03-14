@@ -1,4 +1,4 @@
-use concolic_pbt::{parse_bool_expr, ConcolicState, Explorer, ExploreResult, Solver};
+use concolic_pbt::{ConcolicState, ExploreResult, Explorer, Solver, parse_bool_expr};
 use rand::SeedableRng;
 use std::collections::HashMap;
 
