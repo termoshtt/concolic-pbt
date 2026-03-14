@@ -33,6 +33,17 @@ pub enum BoolExpr {
     Eq(Box<Expr>, Box<Expr>),
 }
 
+/// Statements
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stmt {
+    /// Assignment: let x = expr
+    Let { name: String, expr: Expr },
+    /// Assertion: assert(bool_expr)
+    Assert { expr: BoolExpr },
+    /// Sequence: stmt; stmt
+    Seq(Box<Stmt>, Box<Stmt>),
+}
+
 impl Expr {
     pub fn lit(n: i64) -> Self {
         Expr::Lit(n)
@@ -139,6 +150,16 @@ impl fmt::Display for BoolExpr {
     }
 }
 
+impl fmt::Display for Stmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Stmt::Let { name, expr } => write!(f, "let {} = {}", name, expr),
+            Stmt::Assert { expr } => write!(f, "assert({})", expr),
+            Stmt::Seq(first, second) => write!(f, "{}; {}", first, second),
+        }
+    }
+}
+
 /// Macro for constructing BoolExpr
 ///
 /// # Examples
@@ -164,7 +185,7 @@ macro_rules! cmp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_bool_expr, parse_expr};
+    use crate::{parse_bool_expr, parse_expr, parse_stmt};
 
     #[test]
     #[should_panic(expected = "Variable name must start with an alphabetic character")]
@@ -191,5 +212,12 @@ mod tests {
     fn display_if_expr() {
         insta::assert_snapshot!(parse_expr("if x <= 5 then x else 10").unwrap(), @"ite(x <= 5, x, 10)");
         insta::assert_snapshot!(parse_bool_expr("(if x <= 5 then x else 10) <= 7").unwrap(), @"ite(x <= 5, x, 10) <= 7");
+    }
+
+    #[test]
+    fn display_stmt() {
+        insta::assert_snapshot!(parse_stmt("let x = 5").unwrap(), @"let x = 5");
+        insta::assert_snapshot!(parse_stmt("assert(x <= 10)").unwrap(), @"assert(x <= 10)");
+        insta::assert_snapshot!(parse_stmt("let y = x + 1; assert(y <= 10)").unwrap(), @"let y = x + 1; assert(y <= 10)");
     }
 }
