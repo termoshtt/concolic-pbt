@@ -4,23 +4,17 @@ use crate::{BoolExpr, Env, Expr};
 
 /// Oracle failure types
 ///
-/// These represent failures detected by oracles (assertions, invariants, etc.)
+/// These represent failures detected during evaluation (NaN, Inf, assertion failures, etc.)
 /// that are separate from path constraints used for exploration.
 ///
-/// Path constraints: conditions from if-then-else branches (used for path exploration)
-/// Oracle failures: property violations (used for bug detection)
+/// - Path constraints: conditions from if-then-else branches (used for path exploration)
+/// - Oracle failures: runtime errors detected during evaluation (used for bug detection)
 #[derive(Debug, Clone, PartialEq)]
 pub enum OracleFailure {
-    /// Assertion failure (property evaluated to false)
-    AssertionFailed {
-        /// The boolean expression that failed
-        expr: BoolExpr,
-    },
-    // Future extensions:
+    // TODO: Add variants when Stmt (assert) is added to the language
+    // AssertionFailed { expr: BoolExpr },
     // NaN { tensor: String },
     // Inf { tensor: String },
-    // AllCloseFailed { lhs: String, rhs: String, atol: f64, rtol: f64 },
-    // ShapeMismatch { expected: Vec<usize>, actual: Vec<usize> },
 }
 
 /// State for concolic execution
