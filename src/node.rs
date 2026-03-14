@@ -33,16 +33,18 @@ pub enum BoolExpr {
     Eq(Box<Expr>, Box<Expr>),
 }
 
-/// Statements
+/// Single statement
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     /// Assignment: let x = expr
     Let { name: String, expr: Expr },
     /// Assertion: assert(bool_expr)
     Assert { expr: BoolExpr },
-    /// Sequence of statements
-    Seq(Vec<Stmt>),
 }
+
+/// Sequence of statements
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stmts(pub Vec<Stmt>);
 
 impl Expr {
     pub fn lit(n: i64) -> Self {
@@ -155,16 +157,19 @@ impl fmt::Display for Stmt {
         match self {
             Stmt::Let { name, expr } => write!(f, "let {} = {}", name, expr),
             Stmt::Assert { expr } => write!(f, "assert({})", expr),
-            Stmt::Seq(stmts) => {
-                for (i, stmt) in stmts.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, "; ")?;
-                    }
-                    write!(f, "{}", stmt)?;
-                }
-                Ok(())
-            }
         }
+    }
+}
+
+impl fmt::Display for Stmts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, stmt) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, "; ")?;
+            }
+            write!(f, "{}", stmt)?;
+        }
+        Ok(())
     }
 }
 
@@ -193,7 +198,7 @@ macro_rules! cmp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_bool_expr, parse_expr, parse_stmt};
+    use crate::{parse_bool_expr, parse_expr, parse_stmts};
 
     #[test]
     #[should_panic(expected = "Variable name must start with an alphabetic character")]
@@ -223,9 +228,9 @@ mod tests {
     }
 
     #[test]
-    fn display_stmt() {
-        insta::assert_snapshot!(parse_stmt("let x = 5").unwrap(), @"let x = 5");
-        insta::assert_snapshot!(parse_stmt("assert(x <= 10)").unwrap(), @"assert(x <= 10)");
-        insta::assert_snapshot!(parse_stmt("let y = x + 1; assert(y <= 10)").unwrap(), @"let y = x + 1; assert(y <= 10)");
+    fn display_stmts() {
+        insta::assert_snapshot!(parse_stmts("let x = 5").unwrap(), @"let x = 5");
+        insta::assert_snapshot!(parse_stmts("assert(x <= 10)").unwrap(), @"assert(x <= 10)");
+        insta::assert_snapshot!(parse_stmts("let y = x + 1; assert(y <= 10)").unwrap(), @"let y = x + 1; assert(y <= 10)");
     }
 }

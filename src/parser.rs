@@ -17,7 +17,7 @@
 
 use chumsky::prelude::*;
 
-use crate::{BoolExpr, Expr, Stmt};
+use crate::{BoolExpr, Expr, Stmt, Stmts};
 
 #[derive(Clone, Copy)]
 enum BoolOp {
@@ -185,7 +185,7 @@ pub fn parse_bool_expr(input: &str) -> Result<BoolExpr, Vec<Rich<'_, char>>> {
     bool_expr_parser().parse(input).into_result()
 }
 
-/// Parser for statements (Stmt)
+/// Parser for a single statement (Stmt)
 fn stmt_parser<'a>() -> impl Parser<'a, &'a str, Stmt, extra::Err<Rich<'a, char>>> + Clone {
     let expr = expr_parser();
     let bool_expr = bool_expr_parser();
@@ -204,24 +204,21 @@ fn stmt_parser<'a>() -> impl Parser<'a, &'a str, Stmt, extra::Err<Rich<'a, char>
         .ignore_then(bool_expr.delimited_by(just('(').padded(), just(')').padded()))
         .map(|expr| Stmt::Assert { expr });
 
-    let atom = let_stmt.or(assert_stmt);
-
-    // Sequence: collect statements separated by semicolons
-    atom.separated_by(just(';').padded())
-        .at_least(1)
-        .collect::<Vec<_>>()
-        .map(|stmts| {
-            if stmts.len() == 1 {
-                stmts.into_iter().next().unwrap()
-            } else {
-                Stmt::Seq(stmts)
-            }
-        })
+    let_stmt.or(assert_stmt)
 }
 
-/// Parse a statement from a string
-pub fn parse_stmt(input: &str) -> Result<Stmt, Vec<Rich<'_, char>>> {
-    stmt_parser().parse(input).into_result()
+/// Parser for a sequence of statements (Stmts)
+fn stmts_parser<'a>() -> impl Parser<'a, &'a str, Stmts, extra::Err<Rich<'a, char>>> + Clone {
+    stmt_parser()
+        .separated_by(just(';').padded())
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .map(Stmts)
+}
+
+/// Parse a sequence of statements from a string
+pub fn parse_stmts(input: &str) -> Result<Stmts, Vec<Rich<'_, char>>> {
+    stmts_parser().parse(input).into_result()
 }
 
 #[cfg(test)]
@@ -382,51 +379,51 @@ mod tests {
 
     #[test]
     fn parse_let_stmt() {
-        let result = parse_stmt("let x = 5").unwrap();
+        let result = parse_stmts("let x = 5").unwrap();
         assert_eq!(
             result,
-            Stmt::Let {
+            Stmts(vec![Stmt::Let {
                 name: "x".to_string(),
                 expr: Expr::Lit(5)
-            }
+            }])
         );
     }
 
     #[test]
     fn parse_let_with_expr() {
-        let result = parse_stmt("let y = x + 1").unwrap();
+        let result = parse_stmts("let y = x + 1").unwrap();
         assert_eq!(
             result,
-            Stmt::Let {
+            Stmts(vec![Stmt::Let {
                 name: "y".to_string(),
                 expr: Expr::Add(
                     Box::new(Expr::Var("x".to_string())),
                     Box::new(Expr::Lit(1))
                 )
-            }
+            }])
         );
     }
 
     #[test]
     fn parse_assert_stmt() {
-        let result = parse_stmt("assert(x <= 10)").unwrap();
+        let result = parse_stmts("assert(x <= 10)").unwrap();
         assert_eq!(
             result,
-            Stmt::Assert {
+            Stmts(vec![Stmt::Assert {
                 expr: BoolExpr::Le(
                     Box::new(Expr::Var("x".to_string())),
                     Box::new(Expr::Lit(10))
                 )
-            }
+            }])
         );
     }
 
     #[test]
-    fn parse_seq_stmt() {
-        let result = parse_stmt("let y = x + 1; assert(y <= 10)").unwrap();
+    fn parse_seq_stmts() {
+        let result = parse_stmts("let y = x + 1; assert(y <= 10)").unwrap();
         assert_eq!(
             result,
-            Stmt::Seq(vec![
+            Stmts(vec![
                 Stmt::Let {
                     name: "y".to_string(),
                     expr: Expr::Add(
@@ -446,10 +443,10 @@ mod tests {
 
     #[test]
     fn parse_let_with_if() {
-        let result = parse_stmt("let y = if x <= 5 then x + 1 else x - 1").unwrap();
+        let result = parse_stmts("let y = if x <= 5 then x + 1 else x - 1").unwrap();
         assert_eq!(
             result,
-            Stmt::Let {
+            Stmts(vec![Stmt::Let {
                 name: "y".to_string(),
                 expr: Expr::If(
                     Box::new(BoolExpr::Le(
@@ -465,7 +462,7 @@ mod tests {
                         Box::new(Expr::Lit(1))
                     ))
                 )
-            }
+            }])
         );
     }
 }

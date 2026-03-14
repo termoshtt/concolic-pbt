@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{BoolExpr, ConcolicState, Env, OracleFailure, Solver, Stmt};
+use crate::{BoolExpr, ConcolicState, Env, OracleFailure, Solver, Stmts};
 
 /// Result of exploration
 #[derive(Debug, Clone, PartialEq)]
@@ -161,23 +161,23 @@ impl<R: rand::Rng> Explorer<R> {
         ExploreResult::Verified
     }
 
-    /// Find a counterexample by executing a statement
+    /// Find a counterexample by executing statements
     ///
-    /// The statement can include let bindings and assert statements.
+    /// The statements can include let bindings and assert statements.
     /// Returns Counterexample if an assertion fails.
-    pub fn find_counterexample_stmt(&mut self, stmt: &Stmt, initial_env: Env) -> ExploreResult {
-        self.explore_dfs_stmt(stmt, initial_env, 0)
+    pub fn find_counterexample_stmts(&mut self, stmts: &Stmts, initial_env: Env) -> ExploreResult {
+        self.explore_dfs_stmts(stmts, initial_env, 0)
     }
 
-    fn explore_dfs_stmt(&mut self, stmt: &Stmt, env: Env, min_index: usize) -> ExploreResult {
+    fn explore_dfs_stmts(&mut self, stmts: &Stmts, env: Env, min_index: usize) -> ExploreResult {
         if self.iterations >= self.max_iterations {
             return ExploreResult::MaxIterationsReached;
         }
         self.iterations += 1;
 
-        // Execute statement with current env, collecting path constraints
+        // Execute statements with current env, collecting path constraints
         let mut state = ConcolicState::new(env.clone());
-        let result = state.exec_stmt(stmt);
+        let result = state.exec_stmts(stmts);
 
         // Extract current path
         let path: Path = state
@@ -205,7 +205,7 @@ impl<R: rand::Rng> Explorer<R> {
         for i in (min_index..state.path_constraints.len()).rev() {
             match self.solver.find_alternative(&state, i) {
                 Ok(new_env) => {
-                    let result = self.explore_dfs_stmt(stmt, new_env, i + 1);
+                    let result = self.explore_dfs_stmts(stmts, new_env, i + 1);
                     if matches!(
                         result,
                         ExploreResult::Counterexample { .. } | ExploreResult::MaxIterationsReached
@@ -263,7 +263,7 @@ impl<R> fmt::Display for Explorer<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_bool_expr, parse_stmt};
+    use crate::{parse_bool_expr, parse_stmts};
     use rand::SeedableRng;
     use std::collections::HashMap;
 
@@ -416,44 +416,44 @@ mod tests {
     }
 
     #[test]
-    fn find_counterexample_stmt_basic() {
+    fn find_counterexample_stmts_basic() {
         // let y = if x <= 5 then x else 10; assert(y <= 8)
         // x > 5 のとき y = 10 > 8 で失敗
-        let stmt = parse_stmt("let y = if x <= 5 then x else 10; assert(y <= 8)").unwrap();
+        let stmts = parse_stmts("let y = if x <= 5 then x else 10; assert(y <= 8)").unwrap();
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
 
-        let result = explorer.find_counterexample_stmt(&stmt, HashMap::from([("x".to_string(), 3)]));
+        let result = explorer.find_counterexample_stmts(&stmts, HashMap::from([("x".to_string(), 3)]));
         assert!(matches!(result, ExploreResult::Counterexample { .. }));
     }
 
     #[test]
-    fn find_counterexample_stmt_verified() {
+    fn find_counterexample_stmts_verified() {
         // let y = if x <= 5 then x else x; assert(y == x)
         // Always true: y == x
-        let stmt = parse_stmt("let y = if x <= 5 then x else x; assert(y == x)").unwrap();
+        let stmts = parse_stmts("let y = if x <= 5 then x else x; assert(y == x)").unwrap();
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
 
-        let result = explorer.find_counterexample_stmt(&stmt, HashMap::from([("x".to_string(), 3)]));
+        let result = explorer.find_counterexample_stmts(&stmts, HashMap::from([("x".to_string(), 3)]));
         assert_eq!(result, ExploreResult::Verified);
     }
 
     #[test]
-    fn find_counterexample_stmt_multiple_lets() {
+    fn find_counterexample_stmts_multiple_lets() {
         // let y = x + 1; let z = y + 1; assert(z >= 2)
         // Always true when x >= 0
-        let stmt = parse_stmt("let y = x + 1; let z = y + 1; assert(z >= 2)").unwrap();
+        let stmts = parse_stmts("let y = x + 1; let z = y + 1; assert(z >= 2)").unwrap();
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
 
-        let result = explorer.find_counterexample_stmt(&stmt, HashMap::from([("x".to_string(), 0)]));
+        let result = explorer.find_counterexample_stmts(&stmts, HashMap::from([("x".to_string(), 0)]));
         assert_eq!(result, ExploreResult::Verified);
     }
 }
