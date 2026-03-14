@@ -9,8 +9,8 @@ pub enum ExploreResult {
     Counterexample {
         /// The input that caused the failure
         env: Env,
-        /// Oracle failures detected (e.g., assertion failures)
-        failures: Vec<OracleFailure>,
+        /// The oracle failure (e.g., assertion failure)
+        failure: OracleFailure,
     },
     /// Explored all reachable paths, property holds
     Verified,
@@ -91,12 +91,11 @@ impl<R: rand::Rng> Explorer<R> {
         // Check if property is violated
         if !property_holds {
             // Record assertion failure: find_counterexample(f) implicitly means assert(f)
-            state.oracle_failures.push(OracleFailure::AssertionFailed {
-                expr: property.clone(),
-            });
             return ExploreResult::Counterexample {
                 env,
-                failures: state.oracle_failures,
+                failure: OracleFailure::AssertionFailed {
+                    expr: property.clone(),
+                },
             };
         }
 
@@ -123,14 +122,11 @@ impl<R: rand::Rng> Explorer<R> {
             let mut new_state = ConcolicState::new(new_env.clone());
             let new_property_holds = new_state.eval_bool_pure(property);
             if !new_property_holds {
-                new_state
-                    .oracle_failures
-                    .push(OracleFailure::AssertionFailed {
-                        expr: property.clone(),
-                    });
                 return ExploreResult::Counterexample {
                     env: new_env,
-                    failures: new_state.oracle_failures,
+                    failure: OracleFailure::AssertionFailed {
+                        expr: property.clone(),
+                    },
                 };
             }
             // Solver gave input that doesn't actually violate assertion; continue exploration
@@ -345,11 +341,10 @@ mod tests {
         let result = explorer.find_counterexample(&property, initial_env);
 
         match result {
-            ExploreResult::Counterexample { env, failures } => {
+            ExploreResult::Counterexample { env, failure } => {
                 assert!(env["x"] > 10);
-                assert_eq!(failures.len(), 1);
                 assert!(matches!(
-                    &failures[0],
+                    failure,
                     crate::OracleFailure::AssertionFailed { .. }
                 ));
             }

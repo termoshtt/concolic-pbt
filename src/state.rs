@@ -32,10 +32,8 @@ pub struct ConcolicState {
     /// Collected path constraints (with the branch direction taken)
     ///
     /// These are conditions from if-then-else branches encountered during execution.
-    /// Separate from oracle failures (assertion failures, NaN/Inf, etc.)
+    /// Oracle failures are not stored here; they are returned directly in ExploreResult.
     pub path_constraints: Vec<(BoolExpr, bool)>,
-    /// Oracle failures detected during evaluation
-    pub oracle_failures: Vec<OracleFailure>,
 }
 
 impl ConcolicState {
@@ -43,7 +41,6 @@ impl ConcolicState {
         Self {
             env,
             path_constraints: Vec::new(),
-            oracle_failures: Vec::new(),
         }
     }
 
@@ -135,18 +132,6 @@ impl fmt::Display for ConcolicState {
         writeln!(f, "Path constraints:")?;
         for (expr, taken) in &self.path_constraints {
             writeln!(f, "  {} : {}", self.format_bool_expr(expr), taken)?;
-        }
-
-        // Oracle failures
-        if !self.oracle_failures.is_empty() {
-            writeln!(f, "Oracle failures:")?;
-            for failure in &self.oracle_failures {
-                match failure {
-                    OracleFailure::AssertionFailed { expr } => {
-                        writeln!(f, "  assert({}) failed", self.format_bool_expr(expr))?;
-                    }
-                }
-            }
         }
         Ok(())
     }
