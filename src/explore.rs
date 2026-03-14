@@ -110,13 +110,16 @@ impl<R: rand::Rng> Explorer<R> {
         // Mark this path as visited
         self.visited.push((path.clone(), env));
 
-        // Try to find assertion failure on this path:
-        // Solve: path_constraints AND NOT(property)
-        if let Ok(new_env) = self
-            .solver
-            .find_assertion_failure(&state.path_constraints, property)
-        {
-            // Found a counterexample on this path
+        // Exploration strategy:
+        // 1. First, try to negate the assertion on the current path
+        //    Solve: path_constraints AND NOT(property)
+        // 2. If that fails, try alternative paths by negating branch conditions
+
+        // Step 1: Try to find counterexample on this path
+        let mut constraints_with_negated_assertion = state.path_constraints.clone();
+        constraints_with_negated_assertion.push((property.clone(), false));
+        if let Ok(new_env) = self.solver.solve(&constraints_with_negated_assertion) {
+            // Verify the counterexample (solver might give approximate solution)
             let mut new_state = ConcolicState::new(new_env.clone());
             let new_property_holds = new_state.eval_bool_pure(property);
             if !new_property_holds {
@@ -130,10 +133,10 @@ impl<R: rand::Rng> Explorer<R> {
                     failures: new_state.oracle_failures,
                 };
             }
-            // If property still holds (solver gave bad input), continue exploration
+            // Solver gave input that doesn't actually violate assertion; continue exploration
         }
 
-        // Try to explore alternative paths (depth-first: start from last constraint)
+        // Step 2: Try alternative paths (depth-first: start from last constraint)
         // Only negate constraints at index >= min_index (earlier ones are handled by parent)
         for i in (min_index..state.path_constraints.len()).rev() {
             // Try to find an input for the alternative path
@@ -327,5 +330,30 @@ mod tests {
           Path: FF
           Env: x = 8
         "###);
+    }
+
+    #[test]
+    fn counterexample_includes_assertion_failure() {
+        // Verify that counterexample includes OracleFailure::AssertionFailed
+        let property = parse_bool_expr("x <= 10").unwrap();
+
+        let rng = rand::rngs::StdRng::seed_from_u64(42);
+        let solver = Solver::new(rng, 100);
+        let mut explorer = Explorer::new(solver, 100);
+        let initial_env = HashMap::from([("x".to_string(), 5)]);
+
+        let result = explorer.find_counterexample(&property, initial_env);
+
+        match result {
+            ExploreResult::Counterexample { env, failures } => {
+                assert!(env["x"] > 10);
+                assert_eq!(failures.len(), 1);
+                assert!(matches!(
+                    &failures[0],
+                    crate::OracleFailure::AssertionFailed { .. }
+                ));
+            }
+            _ => panic!("Expected Counterexample"),
+        }
     }
 }

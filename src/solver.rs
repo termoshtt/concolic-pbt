@@ -281,21 +281,6 @@ impl<R: rand::Rng> Solver<R> {
         self.solve(&negated)
     }
 
-    /// Try to find an input that causes assertion failure on the current path
-    ///
-    /// Solves: path_constraints AND NOT(assertion)
-    /// This finds an input that follows the same execution path but violates the assertion.
-    pub fn find_assertion_failure(
-        &mut self,
-        path_constraints: &[(BoolExpr, bool)],
-        assertion: &BoolExpr,
-    ) -> Result<Env, SolverError> {
-        let mut constraints: Vec<(BoolExpr, bool)> = path_constraints.to_vec();
-        // Add negated assertion: we want assertion to be false
-        constraints.push((assertion.clone(), false));
-        self.solve(&constraints)
-    }
-
     /// Solve constraints and return a satisfying assignment
     pub fn solve(&mut self, constraints: &[(BoolExpr, bool)]) -> Result<Env, SolverError> {
         let (bounds, remaining) = extract_bounds(constraints)?;

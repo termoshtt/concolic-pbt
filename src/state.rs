@@ -280,4 +280,19 @@ mod tests {
           y [=4] <= x + 2 [=5] : true
         "###);
     }
+
+    #[test]
+    fn eval_bool_pure_does_not_record() {
+        // eval_bool_pure should evaluate without recording to path_constraints
+        let property = parse_bool_expr("x <= 10").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+
+        let result = state.eval_bool_pure(&property);
+
+        assert!(result);
+        assert!(
+            state.path_constraints.is_empty(),
+            "eval_bool_pure should not record path constraints"
+        );
+    }
 }
