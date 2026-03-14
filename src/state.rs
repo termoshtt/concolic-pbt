@@ -67,19 +67,19 @@ impl ConcolicState {
     /// Used for branch conditions (if-then-else). The condition is recorded
     /// in path_constraints for path exploration.
     pub fn eval_bool(&mut self, expr: &BoolExpr) -> bool {
-        let result = self.eval_bool_pure(expr);
+        let result = self.eval_assert(expr);
         if !matches!(expr, BoolExpr::Lit(_)) {
             self.path_constraints.push((expr.clone(), result));
         }
         result
     }
 
-    /// Evaluate a boolean expression without recording it as a path constraint
+    /// Evaluate an assertion (property) without recording it as a path constraint
     ///
-    /// Used for assertion evaluation. The expression itself is not recorded,
+    /// The assertion expression itself is not recorded to path_constraints,
     /// but any internal branch conditions (from if-then-else in subexpressions)
     /// are still recorded via eval().
-    pub fn eval_bool_pure(&mut self, expr: &BoolExpr) -> bool {
+    pub fn eval_assert(&mut self, expr: &BoolExpr) -> bool {
         match expr {
             BoolExpr::Lit(b) => *b,
             BoolExpr::Le(l, r) => self.eval(l) <= self.eval(r),
@@ -267,17 +267,17 @@ mod tests {
     }
 
     #[test]
-    fn eval_bool_pure_does_not_record() {
-        // eval_bool_pure should evaluate without recording to path_constraints
+    fn eval_assert_does_not_record() {
+        // eval_assert should evaluate without recording to path_constraints
         let property = parse_bool_expr("x <= 10").unwrap();
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
 
-        let result = state.eval_bool_pure(&property);
+        let result = state.eval_assert(&property);
 
         assert!(result);
         assert!(
             state.path_constraints.is_empty(),
-            "eval_bool_pure should not record path constraints"
+            "eval_assert should not record path constraints"
         );
     }
 }

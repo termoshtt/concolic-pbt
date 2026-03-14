@@ -76,10 +76,10 @@ impl<R: rand::Rng> Explorer<R> {
         self.iterations += 1;
 
         // Evaluate property with current env, collecting path constraints
-        // eval_bool_pure does NOT record the property itself (it's an assertion, not a path constraint)
+        // eval_assert does NOT record the property itself (it's an assertion, not a path constraint)
         // but internal branch conditions (from if-then-else) ARE recorded via eval()
         let mut state = ConcolicState::new(env.clone());
-        let property_holds = state.eval_bool_pure(property);
+        let property_holds = state.eval_assert(property);
 
         // Extract current path
         let path: Path = state
@@ -120,7 +120,7 @@ impl<R: rand::Rng> Explorer<R> {
         if let Ok(new_env) = self.solver.solve(&constraints_with_negated_assertion) {
             // Verify the counterexample (solver might give approximate solution)
             let mut new_state = ConcolicState::new(new_env.clone());
-            let new_property_holds = new_state.eval_bool_pure(property);
+            let new_property_holds = new_state.eval_assert(property);
             if !new_property_holds {
                 return ExploreResult::Counterexample {
                     env: new_env,
