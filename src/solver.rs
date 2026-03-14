@@ -277,7 +277,7 @@ impl<R: rand::Rng> Solver<R> {
         state: &ConcolicState,
         index: usize,
     ) -> Result<Env, SolverError> {
-        let negated = negate_at(&state.constraints, index);
+        let negated = negate_at(&state.path_constraints, index);
         self.solve(&negated)
     }
 
@@ -552,9 +552,9 @@ mod tests {
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
         state.eval(&expr);
 
-        // Should have constraint: x <= 5 : true
-        assert_eq!(state.constraints.len(), 1);
-        assert!(state.constraints[0].1);
+        // Should have path constraint: x <= 5 : true
+        assert_eq!(state.path_constraints.len(), 1);
+        assert!(state.path_constraints[0].1);
 
         // Find alternative (negate the constraint)
         let mut solver = Solver::new(rand::rng(), 100);
