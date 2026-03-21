@@ -44,6 +44,13 @@ pub enum Stmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stmts(pub Vec<Stmt>);
 
+impl Stmt {
+    /// Create an assertion statement
+    pub fn assert(expr: BoolExpr) -> Self {
+        Stmt::Assert { expr }
+    }
+}
+
 impl Expr {
     pub fn lit(n: i64) -> Self {
         Expr::Lit(n)
