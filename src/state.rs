@@ -593,4 +593,20 @@ mod tests {
         Path constraints:
         "###);
     }
+
+    #[test]
+    fn shadowing_input_variable() {
+        // let x = x + 1; let x = x + 1
+        // x = 5 -> x = 6 -> x = 7
+        let stmts = parse_stmts("let x = x + 1; let x = x + 1").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        state.exec_stmts(&stmts).unwrap();
+        insta::assert_snapshot!(state, @r###"
+        Env: x = 7
+        Let constraints:
+          x@0 = x + 1
+          x@1 = x@0 + 1
+        Path constraints:
+        "###);
+    }
 }
