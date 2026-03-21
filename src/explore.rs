@@ -417,9 +417,9 @@ mod tests {
 
     #[test]
     fn find_counterexample_stmts_basic() {
-        // let y = if x <= 5 then x else 10; assert(y <= 8)
-        // x > 5 のとき y = 10 > 8 で失敗
-        let stmts = parse_stmts("let y = if x <= 5 then x else 10; assert(y <= 8)").unwrap();
+        // assert((if x <= 5 then x else 10) <= 8)
+        // x > 5 のとき 10 > 8 で失敗
+        let stmts = parse_stmts("assert((if x <= 5 then x else 10) <= 8)").unwrap();
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
@@ -432,9 +432,8 @@ mod tests {
 
     #[test]
     fn find_counterexample_stmts_verified() {
-        // let y = if x <= 5 then x else x; assert(y == x)
-        // Always true: y == x
-        let stmts = parse_stmts("let y = if x <= 5 then x else x; assert(y == x)").unwrap();
+        // assert(x <= x) - always true
+        let stmts = parse_stmts("assert(x <= x)").unwrap();
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
@@ -446,17 +445,20 @@ mod tests {
     }
 
     #[test]
-    fn find_counterexample_stmts_multiple_lets() {
-        // let y = x + 1; let z = y + 1; assert(z >= 2)
-        // Always true when x >= 0
-        let stmts = parse_stmts("let y = x + 1; let z = y + 1; assert(z >= 2)").unwrap();
+    fn find_counterexample_stmts_multiple_asserts() {
+        // Multiple asserts with branching in conditions
+        // assert((if x <= 5 then 1 else 0) >= 0) - always true
+        // assert((if x <= 5 then x else 10) <= 8) - fails when x > 5
+        let stmts =
+            parse_stmts("assert((if x <= 5 then 1 else 0) >= 0); assert((if x <= 5 then x else 10) <= 8)").unwrap();
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
 
         let result =
-            explorer.find_counterexample_stmts(&stmts, HashMap::from([("x".to_string(), 0)]));
-        assert_eq!(result, ExploreResult::Verified);
+            explorer.find_counterexample_stmts(&stmts, HashMap::from([("x".to_string(), 3)]));
+        // Should find counterexample when x > 5 (second assert fails: 10 > 8)
+        assert!(matches!(result, ExploreResult::Counterexample { .. }));
     }
 }

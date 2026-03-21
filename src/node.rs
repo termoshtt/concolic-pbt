@@ -36,8 +36,6 @@ pub enum BoolExpr {
 /// Single statement
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    /// Assignment: let x = expr
-    Let { name: String, expr: Expr },
     /// Assertion: assert(bool_expr)
     Assert { expr: BoolExpr },
 }
@@ -155,7 +153,6 @@ impl fmt::Display for BoolExpr {
 impl fmt::Display for Stmt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Stmt::Let { name, expr } => write!(f, "let {} = {}", name, expr),
             Stmt::Assert { expr } => write!(f, "assert({})", expr),
         }
     }
@@ -229,8 +226,7 @@ mod tests {
 
     #[test]
     fn display_stmts() {
-        insta::assert_snapshot!(parse_stmts("let x = 5").unwrap(), @"let x = 5");
         insta::assert_snapshot!(parse_stmts("assert(x <= 10)").unwrap(), @"assert(x <= 10)");
-        insta::assert_snapshot!(parse_stmts("let y = x + 1; assert(y <= 10)").unwrap(), @"let y = x + 1; assert(y <= 10)");
+        insta::assert_snapshot!(parse_stmts("assert(x >= 0); assert(x <= 10)").unwrap(), @"assert(x >= 0); assert(x <= 10)");
     }
 }

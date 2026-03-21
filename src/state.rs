@@ -91,11 +91,6 @@ impl ConcolicState {
     /// Execute a single statement, returning Err(OracleFailure) if an assertion fails
     pub fn exec_stmt(&mut self, stmt: &Stmt) -> Result<(), OracleFailure> {
         match stmt {
-            Stmt::Let { name, expr } => {
-                let value = self.eval(expr);
-                self.env.insert(name.clone(), value);
-                Ok(())
-            }
             Stmt::Assert { expr } => {
                 if self.eval_assert(expr) {
                     Ok(())
@@ -308,14 +303,6 @@ mod tests {
     }
 
     #[test]
-    fn exec_let_simple() {
-        let stmts = parse_stmts("let x = 5").unwrap();
-        let mut state = ConcolicState::new(HashMap::new());
-        assert!(state.exec_stmts(&stmts).is_ok());
-        assert_eq!(state.env["x"], 5);
-    }
-
-    #[test]
     fn exec_assert_pass() {
         let stmts = parse_stmts("assert(x <= 10)").unwrap();
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
@@ -334,19 +321,20 @@ mod tests {
 
     #[test]
     fn exec_seq() {
-        let stmts = parse_stmts("let y = x + 1; assert(y <= 10)").unwrap();
+        // Multiple asserts
+        let stmts = parse_stmts("assert(x >= 0); assert(x <= 10)").unwrap();
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
         assert!(state.exec_stmts(&stmts).is_ok());
-        assert_eq!(state.env["y"], 6);
     }
 
     #[test]
-    fn exec_seq_with_if() {
-        let stmts = parse_stmts("let y = if x <= 5 then x + 1 else x - 1; assert(y >= 0)").unwrap();
-        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
-        assert!(state.exec_stmts(&stmts).is_ok());
-        assert_eq!(state.env["y"], 4);
-        // Path constraint should be recorded from the if expression
-        assert_eq!(state.path_constraints.len(), 1);
+    fn exec_seq_early_fail() {
+        // First assert fails, second is not reached
+        let stmts = parse_stmts("assert(x <= 0); assert(x >= 10)").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        assert!(matches!(
+            state.exec_stmts(&stmts),
+            Err(OracleFailure::AssertionFailed { .. })
+        ));
     }
 }

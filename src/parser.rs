@@ -59,23 +59,6 @@ fn var<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> + Clo
         .padded()
 }
 
-/// Variable name only (returns String, not Expr)
-fn var_name<'a>() -> impl Parser<'a, &'a str, String, extra::Err<Rich<'a, char>>> + Clone {
-    text::ident()
-        .try_map(|s: &str, span| {
-            let first = s.chars().next().unwrap();
-            if first.is_ascii_lowercase() && !KEYWORDS.contains(&s) {
-                Ok(s.to_string())
-            } else {
-                Err(Rich::custom(
-                    span,
-                    format!("'{}' is not a valid variable name", s),
-                ))
-            }
-        })
-        .padded()
-}
-
 /// Comparison operators: <=, >=, ==
 fn cmp_op<'a>() -> impl Parser<'a, &'a str, BoolOp, extra::Err<Rich<'a, char>>> + Clone {
     choice((
@@ -187,24 +170,13 @@ pub fn parse_bool_expr(input: &str) -> Result<BoolExpr, Vec<Rich<'_, char>>> {
 
 /// Parser for a single statement (Stmt)
 fn stmt_parser<'a>() -> impl Parser<'a, &'a str, Stmt, extra::Err<Rich<'a, char>>> + Clone {
-    let expr = expr_parser();
     let bool_expr = bool_expr_parser();
 
-    // let statement: let x = expr
-    let let_stmt = text::keyword("let")
-        .padded()
-        .ignore_then(var_name())
-        .then_ignore(just('=').padded())
-        .then(expr)
-        .map(|(name, expr)| Stmt::Let { name, expr });
-
     // assert statement: assert(bool_expr)
-    let assert_stmt = text::keyword("assert")
+    text::keyword("assert")
         .padded()
         .ignore_then(bool_expr.delimited_by(just('(').padded(), just(')').padded()))
-        .map(|expr| Stmt::Assert { expr });
-
-    let_stmt.or(assert_stmt)
+        .map(|expr| Stmt::Assert { expr })
 }
 
 /// Parser for a sequence of statements (Stmts)
@@ -378,30 +350,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_let_stmt() {
-        let result = parse_stmts("let x = 5").unwrap();
-        assert_eq!(
-            result,
-            Stmts(vec![Stmt::Let {
-                name: "x".to_string(),
-                expr: Expr::Lit(5)
-            }])
-        );
-    }
-
-    #[test]
-    fn parse_let_with_expr() {
-        let result = parse_stmts("let y = x + 1").unwrap();
-        assert_eq!(
-            result,
-            Stmts(vec![Stmt::Let {
-                name: "y".to_string(),
-                expr: Expr::Add(Box::new(Expr::Var("x".to_string())), Box::new(Expr::Lit(1)))
-            }])
-        );
-    }
-
-    #[test]
     fn parse_assert_stmt() {
         let result = parse_stmts("assert(x <= 10)").unwrap();
         assert_eq!(
@@ -417,46 +365,23 @@ mod tests {
 
     #[test]
     fn parse_seq_stmts() {
-        let result = parse_stmts("let y = x + 1; assert(y <= 10)").unwrap();
+        let result = parse_stmts("assert(x >= 0); assert(x <= 10)").unwrap();
         assert_eq!(
             result,
             Stmts(vec![
-                Stmt::Let {
-                    name: "y".to_string(),
-                    expr: Expr::Add(Box::new(Expr::Var("x".to_string())), Box::new(Expr::Lit(1)))
+                Stmt::Assert {
+                    expr: BoolExpr::Ge(
+                        Box::new(Expr::Var("x".to_string())),
+                        Box::new(Expr::Lit(0))
+                    )
                 },
                 Stmt::Assert {
                     expr: BoolExpr::Le(
-                        Box::new(Expr::Var("y".to_string())),
+                        Box::new(Expr::Var("x".to_string())),
                         Box::new(Expr::Lit(10))
                     )
                 }
             ])
-        );
-    }
-
-    #[test]
-    fn parse_let_with_if() {
-        let result = parse_stmts("let y = if x <= 5 then x + 1 else x - 1").unwrap();
-        assert_eq!(
-            result,
-            Stmts(vec![Stmt::Let {
-                name: "y".to_string(),
-                expr: Expr::If(
-                    Box::new(BoolExpr::Le(
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Lit(5))
-                    )),
-                    Box::new(Expr::Add(
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Lit(1))
-                    )),
-                    Box::new(Expr::Sub(
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Lit(1))
-                    ))
-                )
-            }])
         );
     }
 }
