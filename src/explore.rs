@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{BoolExpr, ConcolicState, Env, OracleFailure, Solver, Stmt, Stmts};
+use crate::{ConcolicState, Env, OracleFailure, Solver, Stmt, Stmts};
 
 /// Result of exploration
 #[derive(Debug, Clone, PartialEq)]
@@ -61,13 +61,11 @@ impl<R: rand::Rng> Explorer<R> {
         }
     }
 
-    /// Find a counterexample where property evaluates to false
+    /// Find a counterexample where the assertion fails
     ///
-    /// The property is a BoolExpr that should hold for all inputs.
-    /// Returns Counterexample(env) if we find an input where property is false.
-    pub fn find_counterexample(&mut self, property: &BoolExpr, initial_env: Env) -> ExploreResult {
-        let stmt = Stmt::assert(property.clone());
-        self.explore_dfs(&stmt, initial_env, 0)
+    /// Returns Counterexample(env) if we find an input where the assertion is violated.
+    pub fn find_counterexample(&mut self, stmt: &Stmt, initial_env: Env) -> ExploreResult {
+        self.explore_dfs(stmt, initial_env, 0)
     }
 
     fn explore_dfs(&mut self, stmt: &Stmt, env: Env, min_index: usize) -> ExploreResult {
@@ -262,14 +260,14 @@ mod tests {
     fn find_simple_counterexample() {
         // Property: x <= 10
         // Should find counterexample where x > 10
-        let property = parse_bool_expr("x <= 10").unwrap();
+        let stmt = Stmt::assert(parse_bool_expr("x <= 10").unwrap());
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
         let initial_env = HashMap::from([("x".to_string(), 5)]);
 
-        let result = explorer.find_counterexample(&property, initial_env);
+        let result = explorer.find_counterexample(&stmt, initial_env);
 
         assert!(matches!(result, ExploreResult::Counterexample { .. }));
         insta::assert_snapshot!(explorer, @r###"
@@ -282,14 +280,14 @@ mod tests {
     #[test]
     fn verify_always_true() {
         // Property: x <= x (always true)
-        let property = parse_bool_expr("x <= x").unwrap();
+        let stmt = Stmt::assert(parse_bool_expr("x <= x").unwrap());
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
         let initial_env = HashMap::from([("x".to_string(), 5)]);
 
-        let result = explorer.find_counterexample(&property, initial_env);
+        let result = explorer.find_counterexample(&stmt, initial_env);
 
         assert_eq!(result, ExploreResult::Verified);
         insta::assert_snapshot!(explorer, @r###"
@@ -303,14 +301,15 @@ mod tests {
     fn explore_branching_property() {
         // Property: (if x <= 5 then x + 1 else x - 1) <= 10
         // This should hold for x in reasonable range
-        let property = parse_bool_expr("(if x <= 5 then x + 1 else x - 1) <= 10").unwrap();
+        let stmt =
+            Stmt::assert(parse_bool_expr("(if x <= 5 then x + 1 else x - 1) <= 10").unwrap());
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
         let initial_env = HashMap::from([("x".to_string(), 3)]);
 
-        let result = explorer.find_counterexample(&property, initial_env);
+        let result = explorer.find_counterexample(&stmt, initial_env);
 
         // Should find counterexample: x > 5 and x - 1 > 10, so x > 11
         assert!(matches!(result, ExploreResult::Counterexample { .. }));
@@ -325,15 +324,16 @@ mod tests {
     fn unreached_path() {
         // Property: (if x <= 5 then (if x >= 10 then 0 else 1) else 1) >= 1
         // The path (x <= 5, true) -> (x >= 10, true) is unreachable (x <= 5 and x >= 10 is contradictory)
-        let property =
-            parse_bool_expr("(if x <= 5 then (if x >= 10 then 0 else 1) else 1) >= 1").unwrap();
+        let stmt = Stmt::assert(
+            parse_bool_expr("(if x <= 5 then (if x >= 10 then 0 else 1) else 1) >= 1").unwrap(),
+        );
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
         let initial_env = HashMap::from([("x".to_string(), 3)]);
 
-        let result = explorer.find_counterexample(&property, initial_env);
+        let result = explorer.find_counterexample(&stmt, initial_env);
 
         assert_eq!(result, ExploreResult::Verified);
         insta::assert_snapshot!(explorer, @r###"
@@ -359,15 +359,16 @@ mod tests {
         //   Path: [F, T, T] or [F, F, T] (x<=5, x>=10, result>=1)
         //
         // This demonstrates that negating at index 0 can lead to a longer path.
-        let property =
-            parse_bool_expr("(if x <= 5 then 1 else (if x >= 10 then 2 else 3)) >= 1").unwrap();
+        let stmt = Stmt::assert(
+            parse_bool_expr("(if x <= 5 then 1 else (if x >= 10 then 2 else 3)) >= 1").unwrap(),
+        );
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
         let initial_env = HashMap::from([("x".to_string(), 3)]);
 
-        let result = explorer.find_counterexample(&property, initial_env);
+        let result = explorer.find_counterexample(&stmt, initial_env);
 
         assert_eq!(result, ExploreResult::Verified);
         // TT has length 2, while FTT and FFT have length 3
@@ -385,14 +386,14 @@ mod tests {
     #[test]
     fn counterexample_includes_assertion_failure() {
         // Verify that counterexample includes OracleFailure::AssertionFailed
-        let property = parse_bool_expr("x <= 10").unwrap();
+        let stmt = Stmt::assert(parse_bool_expr("x <= 10").unwrap());
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);
         let mut explorer = Explorer::new(solver, 100);
         let initial_env = HashMap::from([("x".to_string(), 5)]);
 
-        let result = explorer.find_counterexample(&property, initial_env);
+        let result = explorer.find_counterexample(&stmt, initial_env);
 
         match result {
             ExploreResult::Counterexample { env, failure } => {
