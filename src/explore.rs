@@ -119,13 +119,16 @@ impl<R: rand::Rng> Explorer<R> {
         for assertion in &assertions {
             let mut constraints = state.path_constraints.clone();
             // Add let constraints as equality constraints
-            for (name, expr) in &state.let_constraints {
+            for ((name, version), expr) in &state.let_constraints {
+                let ssa_name = ConcolicState::ssa_name(name, *version);
                 constraints.push((
-                    BoolExpr::Eq(Box::new(crate::Expr::Var(name.clone())), Box::new(expr.clone())),
+                    BoolExpr::Eq(Box::new(crate::Expr::Var(ssa_name)), Box::new(expr.clone())),
                     true,
                 ));
             }
-            constraints.push(((*assertion).clone(), false));
+            // Convert assertion to SSA form
+            let ssa_assertion = state.to_ssa_bool_expr(assertion);
+            constraints.push((ssa_assertion, false));
 
             if let Ok(new_env) = self.solver.solve(&constraints) {
                 // Verify the counterexample (solver might give approximate solution)
@@ -409,6 +412,28 @@ mod tests {
             ExploreResult::Counterexample { env, .. } => {
                 // x should be > 5 and >= 1 (so y = x > 5)
                 assert!(env["x"] > 5, "x = {} should be > 5", env["x"]);
+            }
+            _ => panic!("Expected Counterexample, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn explore_with_shadowing_let() {
+        // let y = x + 1; let y = y + 1; assert(y <= 10)
+        // y = x + 2, so need x + 2 > 10, i.e., x > 8
+        let stmts = crate::parse_stmts("let y = x + 1; let y = y + 1; assert(y <= 10)").unwrap();
+
+        let rng = rand::rngs::StdRng::seed_from_u64(42);
+        let solver = Solver::new(rng, 100);
+        let mut explorer = Explorer::new(solver, 100);
+        let initial_env = HashMap::from([("x".to_string(), 5)]);
+
+        let result = explorer.find_counterexample(&stmts, initial_env);
+
+        match result {
+            ExploreResult::Counterexample { env, .. } => {
+                // x should be > 8 (so y = x + 2 > 10)
+                assert!(env["x"] > 8, "x = {} should be > 8", env["x"]);
             }
             _ => panic!("Expected Counterexample, got {:?}", result),
         }

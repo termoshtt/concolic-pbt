@@ -278,10 +278,11 @@ impl<R: rand::Rng> Solver<R> {
         index: usize,
     ) -> Result<Env, SolverError> {
         let mut constraints = negate_at(&state.path_constraints, index);
-        // Add let constraints as equality constraints (y == expr)
-        for (name, expr) in &state.let_constraints {
+        // Add let constraints as equality constraints (y@version == expr)
+        for ((name, version), expr) in &state.let_constraints {
+            let ssa_name = crate::ConcolicState::ssa_name(name, *version);
             constraints.push((
-                BoolExpr::Eq(Box::new(Expr::Var(name.clone())), Box::new(expr.clone())),
+                BoolExpr::Eq(Box::new(Expr::Var(ssa_name)), Box::new(expr.clone())),
                 true,
             ));
         }
@@ -657,7 +658,7 @@ mod tests {
         let expr = parse_expr("if x <= 5 then x + 1 else 0").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
-        state.eval(&expr);
+        let _ = state.eval(&expr);
 
         // Should have path constraint: x <= 5 : true
         assert_eq!(state.path_constraints.len(), 1);

@@ -29,6 +29,9 @@ pub enum OracleFailure {
     // Inf { tensor: String },
 }
 
+/// SSA-style variable identifier: (name, version)
+pub type SsaVar = (String, usize);
+
 /// State for concolic execution
 #[derive(Debug, Clone)]
 pub struct ConcolicState {
@@ -39,11 +42,16 @@ pub struct ConcolicState {
     /// These are conditions from if-then-else branches encountered during execution.
     /// Oracle failures are not stored here; they are returned directly in ExploreResult.
     pub path_constraints: Vec<(BoolExpr, bool)>,
-    /// Let binding constraints (name == expr)
+    /// Let binding constraints in SSA form: ((name, version), expr)
     ///
-    /// When a `let name = expr` statement is executed, `(name, expr)` is recorded here.
-    /// The solver uses these as equality constraints without expanding `name`.
-    pub let_constraints: Vec<(String, Expr)>,
+    /// When a `let name = expr` statement is executed, the expr is transformed
+    /// to use versioned variable names, and a new version is assigned.
+    /// For example: `let y = x + 1; let y = y + 1` becomes:
+    /// - ((y, 0), x + 1)
+    /// - ((y, 1), (y, 0) + 1)
+    pub let_constraints: Vec<(SsaVar, Expr)>,
+    /// Current version for each variable name
+    versions: std::collections::HashMap<String, usize>,
 }
 
 impl ConcolicState {
@@ -52,6 +60,64 @@ impl ConcolicState {
             env,
             path_constraints: Vec::new(),
             let_constraints: Vec::new(),
+            versions: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Allocate a new version for a variable and return it
+    fn next_version(&mut self, name: &str) -> usize {
+        let version = self.versions.entry(name.to_string()).or_insert(0);
+        let current = *version;
+        *version += 1;
+        current
+    }
+
+    /// Convert variable name to SSA form (name, version)
+    pub fn ssa_name(name: &str, version: usize) -> String {
+        format!("{}@{}", name, version)
+    }
+
+    /// Convert expression to SSA form, replacing let-defined variables with their SSA names
+    pub fn to_ssa_expr(&self, expr: &Expr) -> Expr {
+        match expr {
+            Expr::Lit(n) => Expr::Lit(*n),
+            Expr::Var(name) => {
+                // If this variable was defined by let, use SSA name
+                // Otherwise keep original name (input variable)
+                if let Some(&version) = self.versions.get(name) {
+                    // Use version - 1 because versions points to the next version
+                    Expr::Var(Self::ssa_name(name, version - 1))
+                } else {
+                    Expr::Var(name.clone())
+                }
+            }
+            Expr::Add(l, r) => {
+                Expr::Add(Box::new(self.to_ssa_expr(l)), Box::new(self.to_ssa_expr(r)))
+            }
+            Expr::Sub(l, r) => {
+                Expr::Sub(Box::new(self.to_ssa_expr(l)), Box::new(self.to_ssa_expr(r)))
+            }
+            Expr::If(cond, then_, else_) => Expr::If(
+                Box::new(self.to_ssa_bool_expr(cond)),
+                Box::new(self.to_ssa_expr(then_)),
+                Box::new(self.to_ssa_expr(else_)),
+            ),
+        }
+    }
+
+    /// Convert boolean expression to SSA form
+    pub fn to_ssa_bool_expr(&self, expr: &BoolExpr) -> BoolExpr {
+        match expr {
+            BoolExpr::Lit(b) => BoolExpr::Lit(*b),
+            BoolExpr::Le(l, r) => {
+                BoolExpr::Le(Box::new(self.to_ssa_expr(l)), Box::new(self.to_ssa_expr(r)))
+            }
+            BoolExpr::Ge(l, r) => {
+                BoolExpr::Ge(Box::new(self.to_ssa_expr(l)), Box::new(self.to_ssa_expr(r)))
+            }
+            BoolExpr::Eq(l, r) => {
+                BoolExpr::Eq(Box::new(self.to_ssa_expr(l)), Box::new(self.to_ssa_expr(r)))
+            }
         }
     }
 
@@ -114,11 +180,16 @@ impl ConcolicState {
                 }
             }
             Stmt::Let { name, expr } => {
+                // Convert expr to SSA form before recording (must be done before next_version)
+                let ssa_expr = self.to_ssa_expr(expr);
                 // Evaluate the expression and bind to the environment
                 let value = self.eval(expr)?;
                 self.env.insert(name.clone(), value);
-                // Record the constraint for the solver (name == expr)
-                self.let_constraints.push((name.clone(), expr.clone()));
+                // Allocate new version for this variable
+                let version = self.next_version(name);
+                // Record the constraint for the solver ((name, version) == ssa_expr)
+                self.let_constraints
+                    .push(((name.clone(), version), ssa_expr));
                 Ok(())
             }
         }
@@ -175,8 +246,14 @@ impl fmt::Display for ConcolicState {
         // Let constraints
         if !self.let_constraints.is_empty() {
             writeln!(f, "Let constraints:")?;
-            for (name, expr) in &self.let_constraints {
-                writeln!(f, "  {} = {}", name, self.format_expr(expr))?;
+            for ((name, version), expr) in &self.let_constraints {
+                writeln!(
+                    f,
+                    "  {}@{} = {}",
+                    name,
+                    version,
+                    self.format_expr(expr)
+                )?;
             }
         }
 
@@ -377,7 +454,7 @@ mod tests {
         assert!(state.exec_stmts(&stmts).is_ok());
         assert_eq!(state.env["y"], 6);
         assert_eq!(state.let_constraints.len(), 1);
-        assert_eq!(state.let_constraints[0].0, "y");
+        assert_eq!(state.let_constraints[0].0, ("y".to_string(), 0));
     }
 
     #[test]
@@ -422,7 +499,7 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 5, y = 5
         Let constraints:
-          y = ite(x >= 1, x, x + 1) [=5]
+          y@0 = ite(x >= 1, x, x + 1) [=5]
         Path constraints:
           x [=5] >= 1 : true
         "###);
@@ -464,5 +541,20 @@ mod tests {
             result,
             Err(OracleFailure::UndefinedVariable { name }) if name == "z"
         ));
+    }
+
+    #[test]
+    fn shadowing_let() {
+        // let y = x + 1; let y = y + 1
+        // x = 5 -> y = 6 -> y = 7
+        let stmts = parse_stmts("let y = x + 1; let y = y + 1").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        state.exec_stmts(&stmts).unwrap();
+
+        assert_eq!(state.env["y"], 7);
+        // Both let constraints are recorded with different versions
+        assert_eq!(state.let_constraints.len(), 2);
+        assert_eq!(state.let_constraints[0].0, ("y".to_string(), 0));
+        assert_eq!(state.let_constraints[1].0, ("y".to_string(), 1));
     }
 }
