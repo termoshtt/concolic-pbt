@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{BoolExpr, ConcolicState, Env, OracleFailure, Solver, Stmts};
+use crate::{BoolExpr, ConcolicState, Env, OracleFailure, Solver, Stmt, Stmts};
 
 /// Result of exploration
 #[derive(Debug, Clone, PartialEq)]
@@ -66,20 +66,19 @@ impl<R: rand::Rng> Explorer<R> {
     /// The property is a BoolExpr that should hold for all inputs.
     /// Returns Counterexample(env) if we find an input where property is false.
     pub fn find_counterexample(&mut self, property: &BoolExpr, initial_env: Env) -> ExploreResult {
-        self.explore_dfs(property, initial_env, 0)
+        let stmt = Stmt::assert(property.clone());
+        self.explore_dfs(&stmt, initial_env, 0)
     }
 
-    fn explore_dfs(&mut self, property: &BoolExpr, env: Env, min_index: usize) -> ExploreResult {
+    fn explore_dfs(&mut self, stmt: &Stmt, env: Env, min_index: usize) -> ExploreResult {
         if self.iterations >= self.max_iterations {
             return ExploreResult::MaxIterationsReached;
         }
         self.iterations += 1;
 
-        // Evaluate property with current env, collecting path constraints
-        // eval_assert does NOT record the property itself (it's an assertion, not a path constraint)
-        // but internal branch conditions (from if-then-else) ARE recorded via eval()
+        // Execute statement with current env, collecting path constraints
         let mut state = ConcolicState::new(env.clone());
-        let property_holds = state.eval_assert(property);
+        let result = state.exec_stmt(stmt);
 
         // Extract current path
         let path: Path = state
@@ -88,15 +87,9 @@ impl<R: rand::Rng> Explorer<R> {
             .map(|(_, taken)| *taken)
             .collect();
 
-        // Check if property is violated
-        if !property_holds {
-            // Record assertion failure: find_counterexample(f) implicitly means assert(f)
-            return ExploreResult::Counterexample {
-                env,
-                failure: OracleFailure::AssertionFailed {
-                    expr: property.clone(),
-                },
-            };
+        // Check if assertion failed
+        if let Err(failure) = result {
+            return ExploreResult::Counterexample { env, failure };
         }
 
         // Should never visit the same path twice (exploration strategy guarantees this)
@@ -111,22 +104,20 @@ impl<R: rand::Rng> Explorer<R> {
 
         // Exploration strategy:
         // 1. First, try to negate the assertion on the current path
-        //    Solve: path_constraints AND NOT(property)
+        //    Solve: path_constraints AND NOT(assertion)
         // 2. If that fails, try alternative paths by negating branch conditions
 
         // Step 1: Try to find counterexample on this path
+        let Stmt::Assert { expr } = stmt;
         let mut constraints_with_negated_assertion = state.path_constraints.clone();
-        constraints_with_negated_assertion.push((property.clone(), false));
+        constraints_with_negated_assertion.push((expr.clone(), false));
         if let Ok(new_env) = self.solver.solve(&constraints_with_negated_assertion) {
             // Verify the counterexample (solver might give approximate solution)
             let mut new_state = ConcolicState::new(new_env.clone());
-            let new_property_holds = new_state.eval_assert(property);
-            if !new_property_holds {
+            if new_state.exec_stmt(stmt).is_err() {
                 return ExploreResult::Counterexample {
                     env: new_env,
-                    failure: OracleFailure::AssertionFailed {
-                        expr: property.clone(),
-                    },
+                    failure: OracleFailure::AssertionFailed { expr: expr.clone() },
                 };
             }
             // Solver gave input that doesn't actually violate assertion; continue exploration
@@ -141,7 +132,7 @@ impl<R: rand::Rng> Explorer<R> {
                     // Recurse with i+1 as the new min_index
                     // Child should not negate constraints at or before index i
                     // (negating at i would bring us back to the parent's path prefix)
-                    let result = self.explore_dfs(property, new_env, i + 1);
+                    let result = self.explore_dfs(stmt, new_env, i + 1);
                     if matches!(
                         result,
                         ExploreResult::Counterexample { .. } | ExploreResult::MaxIterationsReached
