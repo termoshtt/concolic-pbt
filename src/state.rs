@@ -19,6 +19,11 @@ pub enum OracleFailure {
         /// The boolean expression that was asserted and evaluated to false
         expr: BoolExpr,
     },
+    /// Undefined variable reference
+    UndefinedVariable {
+        /// The name of the undefined variable
+        name: String,
+    },
     // Future extensions:
     // NaN { tensor: String },
     // Inf { tensor: String },
@@ -51,15 +56,19 @@ impl ConcolicState {
     }
 
     /// Evaluate an integer expression
-    pub fn eval(&mut self, expr: &Expr) -> i64 {
+    pub fn eval(&mut self, expr: &Expr) -> Result<i64, OracleFailure> {
         match expr {
-            Expr::Lit(n) => *n,
-            Expr::Var(name) => self.env[name],
-            Expr::Add(l, r) => self.eval(l) + self.eval(r),
-            Expr::Sub(l, r) => self.eval(l) - self.eval(r),
+            Expr::Lit(n) => Ok(*n),
+            Expr::Var(name) => self.env.get(name).copied().ok_or_else(|| {
+                OracleFailure::UndefinedVariable {
+                    name: name.clone(),
+                }
+            }),
+            Expr::Add(l, r) => Ok(self.eval(l)? + self.eval(r)?),
+            Expr::Sub(l, r) => Ok(self.eval(l)? - self.eval(r)?),
             Expr::If(cond, then_, else_) => {
                 // eval_bool records the constraint
-                if self.eval_bool(cond) {
+                if self.eval_bool(cond)? {
                     self.eval(then_)
                 } else {
                     self.eval(else_)
@@ -72,12 +81,12 @@ impl ConcolicState {
     ///
     /// Used for branch conditions (if-then-else). The condition is recorded
     /// in path_constraints for path exploration.
-    pub fn eval_bool(&mut self, expr: &BoolExpr) -> bool {
-        let result = self.eval_assert(expr);
+    pub fn eval_bool(&mut self, expr: &BoolExpr) -> Result<bool, OracleFailure> {
+        let result = self.eval_assert(expr)?;
         if !matches!(expr, BoolExpr::Lit(_)) {
             self.path_constraints.push((expr.clone(), result));
         }
-        result
+        Ok(result)
     }
 
     /// Evaluate an assertion (property) without recording it as a path constraint
@@ -85,12 +94,12 @@ impl ConcolicState {
     /// The assertion expression itself is not recorded to path_constraints,
     /// but any internal branch conditions (from if-then-else in subexpressions)
     /// are still recorded via eval().
-    pub fn eval_assert(&mut self, expr: &BoolExpr) -> bool {
+    pub fn eval_assert(&mut self, expr: &BoolExpr) -> Result<bool, OracleFailure> {
         match expr {
-            BoolExpr::Lit(b) => *b,
-            BoolExpr::Le(l, r) => self.eval(l) <= self.eval(r),
-            BoolExpr::Ge(l, r) => self.eval(l) >= self.eval(r),
-            BoolExpr::Eq(l, r) => self.eval(l) == self.eval(r),
+            BoolExpr::Lit(b) => Ok(*b),
+            BoolExpr::Le(l, r) => Ok(self.eval(l)? <= self.eval(r)?),
+            BoolExpr::Ge(l, r) => Ok(self.eval(l)? >= self.eval(r)?),
+            BoolExpr::Eq(l, r) => Ok(self.eval(l)? == self.eval(r)?),
         }
     }
 
@@ -98,7 +107,7 @@ impl ConcolicState {
     pub fn exec_stmt(&mut self, stmt: &Stmt) -> Result<(), OracleFailure> {
         match stmt {
             Stmt::Assert { expr } => {
-                if self.eval_assert(expr) {
+                if self.eval_assert(expr)? {
                     Ok(())
                 } else {
                     Err(OracleFailure::AssertionFailed { expr: expr.clone() })
@@ -106,7 +115,7 @@ impl ConcolicState {
             }
             Stmt::Let { name, expr } => {
                 // Evaluate the expression and bind to the environment
-                let value = self.eval(expr);
+                let value = self.eval(expr)?;
                 self.env.insert(name.clone(), value);
                 // Record the constraint for the solver (name == expr)
                 self.let_constraints.push((name.clone(), expr.clone()));
@@ -191,7 +200,7 @@ mod tests {
     fn eval_simple() {
         let expr = parse_expr("x + 1").unwrap();
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
-        insta::assert_snapshot!(state.eval(&expr), @"6");
+        insta::assert_snapshot!(state.eval(&expr).unwrap(), @"6");
         insta::assert_snapshot!(state, @r###"
         Env: x = 5
         Path constraints:
@@ -203,7 +212,7 @@ mod tests {
         let expr = parse_expr("if x <= 10 then x + 1 else 0").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
-        insta::assert_snapshot!(state.eval(&expr), @"6");
+        insta::assert_snapshot!(state.eval(&expr).unwrap(), @"6");
         insta::assert_snapshot!(state, @r###"
         Env: x = 5
         Path constraints:
@@ -216,7 +225,7 @@ mod tests {
         let expr = parse_expr("if x <= 10 then x + 1 else 0").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 15)]));
-        insta::assert_snapshot!(state.eval(&expr), @"0");
+        insta::assert_snapshot!(state.eval(&expr).unwrap(), @"0");
         insta::assert_snapshot!(state, @r###"
         Env: x = 15
         Path constraints:
@@ -231,7 +240,7 @@ mod tests {
         let cond = parse_bool_expr("(if x <= 5 then x else 10) <= 7").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
-        insta::assert_snapshot!(state.eval_bool(&cond), @"true");
+        insta::assert_snapshot!(state.eval_bool(&cond).unwrap(), @"true");
         insta::assert_snapshot!(state, @r###"
         Env: x = 3
         Path constraints:
@@ -247,7 +256,7 @@ mod tests {
         let cond = parse_bool_expr("(if x <= 5 then x else 10) <= 7").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 8)]));
-        insta::assert_snapshot!(state.eval_bool(&cond), @"false");
+        insta::assert_snapshot!(state.eval_bool(&cond).unwrap(), @"false");
         insta::assert_snapshot!(state, @r###"
         Env: x = 8
         Path constraints:
@@ -263,7 +272,7 @@ mod tests {
 
         // x = 2: inner = 2 + 5 = 7, 7 <= 3 is false, result = 0
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 2)]));
-        insta::assert_snapshot!(state.eval(&expr), @"0");
+        insta::assert_snapshot!(state.eval(&expr).unwrap(), @"0");
         insta::assert_snapshot!(state, @r###"
         Env: x = 2
         Path constraints:
@@ -283,7 +292,7 @@ mod tests {
         // x = 2, y = -1: inner_inner = 2+5 = 7, inner = 7, 7 <= 3 is false, result = 0
         let mut state =
             ConcolicState::new(HashMap::from([("x".to_string(), 2), ("y".to_string(), -1)]));
-        insta::assert_snapshot!(state.eval(&expr), @"0");
+        insta::assert_snapshot!(state.eval(&expr).unwrap(), @"0");
         insta::assert_snapshot!(state, @r###"
         Env: x = 2, y = -1
         Path constraints:
@@ -299,7 +308,7 @@ mod tests {
 
         let mut state =
             ConcolicState::new(HashMap::from([("x".to_string(), 3), ("y".to_string(), 4)]));
-        state.eval(&expr);
+        state.eval(&expr).unwrap();
 
         insta::assert_snapshot!(state, @r###"
         Env: x = 3, y = 4
@@ -315,7 +324,7 @@ mod tests {
         let property = parse_bool_expr("x <= 10").unwrap();
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
 
-        let result = state.eval_assert(&property);
+        let result = state.eval_assert(&property).unwrap();
 
         assert!(result);
         assert!(
@@ -417,5 +426,43 @@ mod tests {
         Path constraints:
           x [=5] >= 1 : true
         "###);
+    }
+
+    #[test]
+    fn undefined_variable_error() {
+        // Reference undefined variable 'y'
+        let expr = parse_expr("x + y").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+
+        let result = state.eval(&expr);
+        assert!(matches!(
+            result,
+            Err(OracleFailure::UndefinedVariable { name }) if name == "y"
+        ));
+    }
+
+    #[test]
+    fn undefined_variable_in_assert() {
+        let stmts = parse_stmts("assert(y <= 10)").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+
+        let result = state.exec_stmts(&stmts);
+        assert!(matches!(
+            result,
+            Err(OracleFailure::UndefinedVariable { name }) if name == "y"
+        ));
+    }
+
+    #[test]
+    fn undefined_variable_in_let() {
+        // let y = z + 1 where z is undefined
+        let stmts = parse_stmts("let y = z + 1").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+
+        let result = state.exec_stmts(&stmts);
+        assert!(matches!(
+            result,
+            Err(OracleFailure::UndefinedVariable { name }) if name == "z"
+        ));
     }
 }
