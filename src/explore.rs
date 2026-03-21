@@ -289,8 +289,7 @@ mod tests {
     fn unreached_path() {
         // Property: (if x <= 5 then (if x >= 10 then 0 else 1) else 1) >= 1
         // The path (x <= 5, true) -> (x >= 10, true) is unreachable (x <= 5 and x >= 10 is contradictory)
-        let stmts =
-            assert_stmts("(if x <= 5 then (if x >= 10 then 0 else 1) else 1) >= 1");
+        let stmts = assert_stmts("(if x <= 5 then (if x >= 10 then 0 else 1) else 1) >= 1");
 
         let rng = rand::rngs::StdRng::seed_from_u64(42);
         let solver = Solver::new(rng, 100);

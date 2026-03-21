@@ -125,11 +125,11 @@ impl ConcolicState {
     pub fn eval(&mut self, expr: &Expr) -> Result<i64, OracleFailure> {
         match expr {
             Expr::Lit(n) => Ok(*n),
-            Expr::Var(name) => self.env.get(name).copied().ok_or_else(|| {
-                OracleFailure::UndefinedVariable {
-                    name: name.clone(),
-                }
-            }),
+            Expr::Var(name) => self
+                .env
+                .get(name)
+                .copied()
+                .ok_or_else(|| OracleFailure::UndefinedVariable { name: name.clone() }),
             Expr::Add(l, r) => Ok(self.eval(l)? + self.eval(r)?),
             Expr::Sub(l, r) => Ok(self.eval(l)? - self.eval(r)?),
             Expr::If(cond, then_, else_) => {
@@ -247,13 +247,7 @@ impl fmt::Display for ConcolicState {
         if !self.let_constraints.is_empty() {
             writeln!(f, "Let constraints:")?;
             for ((name, version), expr) in &self.let_constraints {
-                writeln!(
-                    f,
-                    "  {}@{} = {}",
-                    name,
-                    version,
-                    self.format_expr(expr)
-                )?;
+                writeln!(f, "  {}@{} = {}", name, version, self.format_expr(expr))?;
             }
         }
 
