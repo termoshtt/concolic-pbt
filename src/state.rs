@@ -276,7 +276,7 @@ impl fmt::Display for ConcolicState {
         if !self.let_constraints.is_empty() {
             writeln!(f, "Let constraints:")?;
             for (ssa_var, expr) in &self.let_constraints {
-                writeln!(f, "  {} = {}", ssa_var, self.format_expr(expr))?;
+                writeln!(f, "  {} = {}", ssa_var, expr)?;
             }
         }
 
@@ -474,10 +474,13 @@ mod tests {
         // let y = x + 1
         let stmts = parse_stmts("let y = x + 1").unwrap();
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
-        assert!(state.exec_stmts(&stmts).is_ok());
-        assert_eq!(state.env["y"], 6);
-        assert_eq!(state.let_constraints.len(), 1);
-        assert_eq!(state.let_constraints[0].0, SsaVar::new("y", 0));
+        state.exec_stmts(&stmts).unwrap();
+        insta::assert_snapshot!(state, @r###"
+        Env: x = 5, y = 6
+        Let constraints:
+          y@0 = x + 1
+        Path constraints:
+        "###);
     }
 
     #[test]
@@ -486,10 +489,14 @@ mod tests {
         // When x = 5: y = 5, path constraint: x >= 1 : true
         let stmts = parse_stmts("let y = if x >= 1 then x else x + 1").unwrap();
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
-        assert!(state.exec_stmts(&stmts).is_ok());
-        assert_eq!(state.env["y"], 5);
-        assert_eq!(state.path_constraints.len(), 1);
-        assert!(state.path_constraints[0].1); // x >= 1 : true
+        state.exec_stmts(&stmts).unwrap();
+        insta::assert_snapshot!(state, @r###"
+        Env: x = 5, y = 5
+        Let constraints:
+          y@0 = ite(x >= 1, x, x + 1)
+        Path constraints:
+          x [=5] >= 1 : true
+        "###);
     }
 
     #[test]
@@ -497,8 +504,13 @@ mod tests {
         // let y = x + 1; assert(y <= 10)
         let stmts = parse_stmts("let y = x + 1; assert(y <= 10)").unwrap();
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
-        assert!(state.exec_stmts(&stmts).is_ok());
-        assert_eq!(state.env["y"], 6);
+        state.exec_stmts(&stmts).unwrap();
+        insta::assert_snapshot!(state, @r###"
+        Env: x = 5, y = 6
+        Let constraints:
+          y@0 = x + 1
+        Path constraints:
+        "###);
     }
 
     #[test]
@@ -522,7 +534,7 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 5, y = 5
         Let constraints:
-          y@0 = ite(x >= 1, x, x + 1) [=5]
+          y@0 = ite(x >= 1, x, x + 1)
         Path constraints:
           x [=5] >= 1 : true
         "###);
@@ -573,11 +585,12 @@ mod tests {
         let stmts = parse_stmts("let y = x + 1; let y = y + 1").unwrap();
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
         state.exec_stmts(&stmts).unwrap();
-
-        assert_eq!(state.env["y"], 7);
-        // Both let constraints are recorded with different versions
-        assert_eq!(state.let_constraints.len(), 2);
-        assert_eq!(state.let_constraints[0].0, SsaVar::new("y", 0));
-        assert_eq!(state.let_constraints[1].0, SsaVar::new("y", 1));
+        insta::assert_snapshot!(state, @r###"
+        Env: x = 5, y = 7
+        Let constraints:
+          y@0 = x + 1
+          y@1 = y@0 + 1
+        Path constraints:
+        "###);
     }
 }
