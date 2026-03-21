@@ -30,7 +30,41 @@ pub enum OracleFailure {
 }
 
 /// SSA-style variable identifier: (name, version)
-pub type SsaVar = (String, usize);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SsaVar {
+    pub name: String,
+    pub version: usize,
+}
+
+impl SsaVar {
+    pub fn new(name: impl Into<String>, version: usize) -> Self {
+        Self {
+            name: name.into(),
+            version,
+        }
+    }
+}
+
+impl From<String> for SsaVar {
+    fn from(name: String) -> Self {
+        Self { name, version: 0 }
+    }
+}
+
+impl From<&str> for SsaVar {
+    fn from(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            version: 0,
+        }
+    }
+}
+
+impl fmt::Display for SsaVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.name, self.version)
+    }
+}
 
 /// State for concolic execution
 #[derive(Debug, Clone)]
@@ -72,11 +106,6 @@ impl ConcolicState {
         current
     }
 
-    /// Convert variable name to SSA form (name, version)
-    pub fn ssa_name(name: &str, version: usize) -> String {
-        format!("{}@{}", name, version)
-    }
-
     /// Convert expression to SSA form, replacing let-defined variables with their SSA names
     pub fn to_ssa_expr(&self, expr: &Expr) -> Expr {
         match expr {
@@ -86,7 +115,7 @@ impl ConcolicState {
                 // Otherwise keep original name (input variable)
                 if let Some(&version) = self.versions.get(name) {
                     // Use version - 1 because versions points to the next version
-                    Expr::Var(Self::ssa_name(name, version - 1))
+                    Expr::Var(SsaVar::new(name, version - 1).to_string())
                 } else {
                     Expr::Var(name.clone())
                 }
@@ -187,9 +216,9 @@ impl ConcolicState {
                 self.env.insert(name.clone(), value);
                 // Allocate new version for this variable
                 let version = self.next_version(name);
-                // Record the constraint for the solver ((name, version) == ssa_expr)
+                // Record the constraint for the solver (name@version == ssa_expr)
                 self.let_constraints
-                    .push(((name.clone(), version), ssa_expr));
+                    .push((SsaVar::new(name.clone(), version), ssa_expr));
                 Ok(())
             }
         }
@@ -246,8 +275,8 @@ impl fmt::Display for ConcolicState {
         // Let constraints
         if !self.let_constraints.is_empty() {
             writeln!(f, "Let constraints:")?;
-            for ((name, version), expr) in &self.let_constraints {
-                writeln!(f, "  {}@{} = {}", name, version, self.format_expr(expr))?;
+            for (ssa_var, expr) in &self.let_constraints {
+                writeln!(f, "  {} = {}", ssa_var, self.format_expr(expr))?;
             }
         }
 
@@ -448,7 +477,7 @@ mod tests {
         assert!(state.exec_stmts(&stmts).is_ok());
         assert_eq!(state.env["y"], 6);
         assert_eq!(state.let_constraints.len(), 1);
-        assert_eq!(state.let_constraints[0].0, ("y".to_string(), 0));
+        assert_eq!(state.let_constraints[0].0, SsaVar::new("y", 0));
     }
 
     #[test]
@@ -548,7 +577,7 @@ mod tests {
         assert_eq!(state.env["y"], 7);
         // Both let constraints are recorded with different versions
         assert_eq!(state.let_constraints.len(), 2);
-        assert_eq!(state.let_constraints[0].0, ("y".to_string(), 0));
-        assert_eq!(state.let_constraints[1].0, ("y".to_string(), 1));
+        assert_eq!(state.let_constraints[0].0, SsaVar::new("y", 0));
+        assert_eq!(state.let_constraints[1].0, SsaVar::new("y", 1));
     }
 }

@@ -119,10 +119,12 @@ impl<R: rand::Rng> Explorer<R> {
         for assertion in &assertions {
             let mut constraints = state.path_constraints.clone();
             // Add let constraints as equality constraints
-            for ((name, version), expr) in &state.let_constraints {
-                let ssa_name = ConcolicState::ssa_name(name, *version);
+            for (ssa_var, expr) in &state.let_constraints {
                 constraints.push((
-                    BoolExpr::Eq(Box::new(crate::Expr::Var(ssa_name)), Box::new(expr.clone())),
+                    BoolExpr::Eq(
+                        Box::new(crate::Expr::Var(ssa_var.to_string())),
+                        Box::new(expr.clone()),
+                    ),
                     true,
                 ));
             }
