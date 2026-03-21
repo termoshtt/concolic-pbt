@@ -168,15 +168,43 @@ pub fn parse_bool_expr(input: &str) -> Result<BoolExpr, Vec<Rich<'_, char>>> {
     bool_expr_parser().parse(input).into_result()
 }
 
+/// Parser for variable name (returns String instead of Expr)
+fn var_name<'a>() -> impl Parser<'a, &'a str, String, extra::Err<Rich<'a, char>>> + Clone {
+    text::ident()
+        .try_map(|s: &str, span| {
+            let first = s.chars().next().unwrap();
+            if first.is_ascii_lowercase() && !KEYWORDS.contains(&s) {
+                Ok(s.to_string())
+            } else {
+                Err(Rich::custom(
+                    span,
+                    format!("'{}' is not a valid variable name", s),
+                ))
+            }
+        })
+        .padded()
+}
+
 /// Parser for a single statement (Stmt)
 fn stmt_parser<'a>() -> impl Parser<'a, &'a str, Stmt, extra::Err<Rich<'a, char>>> + Clone {
     let bool_expr = bool_expr_parser();
+    let expr = expr_parser();
 
     // assert statement: assert(bool_expr)
-    text::keyword("assert")
+    let assert_stmt = text::keyword("assert")
         .padded()
         .ignore_then(bool_expr.delimited_by(just('(').padded(), just(')').padded()))
-        .map(|expr| Stmt::Assert { expr })
+        .map(|expr| Stmt::Assert { expr });
+
+    // let statement: let var = expr
+    let let_stmt = text::keyword("let")
+        .padded()
+        .ignore_then(var_name())
+        .then_ignore(just('=').padded())
+        .then(expr)
+        .map(|(name, expr)| Stmt::Let { name, expr });
+
+    let_stmt.or(assert_stmt)
 }
 
 /// Parser for a sequence of statements (Stmts)
@@ -378,6 +406,63 @@ mod tests {
                 Stmt::Assert {
                     expr: BoolExpr::Le(
                         Box::new(Expr::Var("x".to_string())),
+                        Box::new(Expr::Lit(10))
+                    )
+                }
+            ])
+        );
+    }
+
+    #[test]
+    fn parse_let_stmt() {
+        let result = parse_stmts("let y = x + 1").unwrap();
+        assert_eq!(
+            result,
+            Stmts(vec![Stmt::Let {
+                name: "y".to_string(),
+                expr: Expr::Add(Box::new(Expr::Var("x".to_string())), Box::new(Expr::Lit(1)))
+            }])
+        );
+    }
+
+    #[test]
+    fn parse_let_with_if() {
+        let result = parse_stmts("let y = if x >= 1 then x else x + 1").unwrap();
+        assert_eq!(
+            result,
+            Stmts(vec![Stmt::Let {
+                name: "y".to_string(),
+                expr: Expr::If(
+                    Box::new(BoolExpr::Ge(
+                        Box::new(Expr::Var("x".to_string())),
+                        Box::new(Expr::Lit(1))
+                    )),
+                    Box::new(Expr::Var("x".to_string())),
+                    Box::new(Expr::Add(
+                        Box::new(Expr::Var("x".to_string())),
+                        Box::new(Expr::Lit(1))
+                    ))
+                )
+            }])
+        );
+    }
+
+    #[test]
+    fn parse_let_then_assert() {
+        let result = parse_stmts("let y = x + 1; assert(y <= 10)").unwrap();
+        assert_eq!(
+            result,
+            Stmts(vec![
+                Stmt::Let {
+                    name: "y".to_string(),
+                    expr: Expr::Add(
+                        Box::new(Expr::Var("x".to_string())),
+                        Box::new(Expr::Lit(1))
+                    )
+                },
+                Stmt::Assert {
+                    expr: BoolExpr::Le(
+                        Box::new(Expr::Var("y".to_string())),
                         Box::new(Expr::Lit(10))
                     )
                 }

@@ -38,6 +38,11 @@ pub enum BoolExpr {
 pub enum Stmt {
     /// Assertion: assert(bool_expr)
     Assert { expr: BoolExpr },
+    /// Variable binding: let name = expr
+    ///
+    /// The binding introduces a constraint `name == expr` for the solver,
+    /// without expanding `name` in subsequent expressions.
+    Let { name: String, expr: Expr },
 }
 
 /// Sequence of statements
@@ -48,6 +53,14 @@ impl Stmt {
     /// Create an assertion statement
     pub fn assert(expr: BoolExpr) -> Self {
         Stmt::Assert { expr }
+    }
+
+    /// Create a let binding statement
+    pub fn let_(name: impl Into<String>, expr: Expr) -> Self {
+        Stmt::Let {
+            name: name.into(),
+            expr,
+        }
     }
 }
 
@@ -161,6 +174,7 @@ impl fmt::Display for Stmt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Stmt::Assert { expr } => write!(f, "assert({})", expr),
+            Stmt::Let { name, expr } => write!(f, "let {} = {}", name, expr),
         }
     }
 }
@@ -235,5 +249,18 @@ mod tests {
     fn display_stmts() {
         insta::assert_snapshot!(parse_stmts("assert(x <= 10)").unwrap(), @"assert(x <= 10)");
         insta::assert_snapshot!(parse_stmts("assert(x >= 0); assert(x <= 10)").unwrap(), @"assert(x >= 0); assert(x <= 10)");
+    }
+
+    #[test]
+    fn display_let_stmt() {
+        insta::assert_snapshot!(parse_stmts("let y = x + 1").unwrap(), @"let y = x + 1");
+        insta::assert_snapshot!(
+            parse_stmts("let y = if x >= 1 then x else x + 1").unwrap(),
+            @"let y = ite(x >= 1, x, x + 1)"
+        );
+        insta::assert_snapshot!(
+            parse_stmts("let y = x + 1; assert(y <= 10)").unwrap(),
+            @"let y = x + 1; assert(y <= 10)"
+        );
     }
 }

@@ -34,6 +34,11 @@ pub struct ConcolicState {
     /// These are conditions from if-then-else branches encountered during execution.
     /// Oracle failures are not stored here; they are returned directly in ExploreResult.
     pub path_constraints: Vec<(BoolExpr, bool)>,
+    /// Let binding constraints (name == expr)
+    ///
+    /// When a `let name = expr` statement is executed, `(name, expr)` is recorded here.
+    /// The solver uses these as equality constraints without expanding `name`.
+    pub let_constraints: Vec<(String, Expr)>,
 }
 
 impl ConcolicState {
@@ -41,6 +46,7 @@ impl ConcolicState {
         Self {
             env,
             path_constraints: Vec::new(),
+            let_constraints: Vec::new(),
         }
     }
 
@@ -98,6 +104,14 @@ impl ConcolicState {
                     Err(OracleFailure::AssertionFailed { expr: expr.clone() })
                 }
             }
+            Stmt::Let { name, expr } => {
+                // Evaluate the expression and bind to the environment
+                let value = self.eval(expr);
+                self.env.insert(name.clone(), value);
+                // Record the constraint for the solver (name == expr)
+                self.let_constraints.push((name.clone(), expr.clone()));
+                Ok(())
+            }
         }
     }
 
@@ -148,6 +162,14 @@ impl fmt::Display for ConcolicState {
             write!(f, "{} = {}", name, val)?;
         }
         writeln!(f)?;
+
+        // Let constraints
+        if !self.let_constraints.is_empty() {
+            writeln!(f, "Let constraints:")?;
+            for (name, expr) in &self.let_constraints {
+                writeln!(f, "  {} = {}", name, self.format_expr(expr))?;
+            }
+        }
 
         // Path constraints
         writeln!(f, "Path constraints:")?;
@@ -336,5 +358,64 @@ mod tests {
             state.exec_stmts(&stmts),
             Err(OracleFailure::AssertionFailed { .. })
         ));
+    }
+
+    #[test]
+    fn exec_let_simple() {
+        // let y = x + 1
+        let stmts = parse_stmts("let y = x + 1").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        assert!(state.exec_stmts(&stmts).is_ok());
+        assert_eq!(state.env["y"], 6);
+        assert_eq!(state.let_constraints.len(), 1);
+        assert_eq!(state.let_constraints[0].0, "y");
+    }
+
+    #[test]
+    fn exec_let_with_if() {
+        // let y = if x >= 1 then x else x + 1
+        // When x = 5: y = 5, path constraint: x >= 1 : true
+        let stmts = parse_stmts("let y = if x >= 1 then x else x + 1").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        assert!(state.exec_stmts(&stmts).is_ok());
+        assert_eq!(state.env["y"], 5);
+        assert_eq!(state.path_constraints.len(), 1);
+        assert!(state.path_constraints[0].1); // x >= 1 : true
+    }
+
+    #[test]
+    fn exec_let_then_assert() {
+        // let y = x + 1; assert(y <= 10)
+        let stmts = parse_stmts("let y = x + 1; assert(y <= 10)").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        assert!(state.exec_stmts(&stmts).is_ok());
+        assert_eq!(state.env["y"], 6);
+    }
+
+    #[test]
+    fn exec_let_then_assert_fail() {
+        // let y = x + 1; assert(y <= 10)
+        // When x = 15: y = 16, assertion fails
+        let stmts = parse_stmts("let y = x + 1; assert(y <= 10)").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 15)]));
+        assert!(matches!(
+            state.exec_stmts(&stmts),
+            Err(OracleFailure::AssertionFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn display_state_with_let() {
+        let stmts = parse_stmts("let y = if x >= 1 then x else x + 1").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        state.exec_stmts(&stmts).unwrap();
+
+        insta::assert_snapshot!(state, @r###"
+        Env: x = 5, y = 5
+        Let constraints:
+          y = ite(x >= 1, x, x + 1) [=5]
+        Path constraints:
+          x [=5] >= 1 : true
+        "###);
     }
 }

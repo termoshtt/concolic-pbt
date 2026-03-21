@@ -277,19 +277,34 @@ impl<R: rand::Rng> Solver<R> {
         state: &ConcolicState,
         index: usize,
     ) -> Result<Env, SolverError> {
-        let negated = negate_at(&state.path_constraints, index);
-        self.solve(&negated)
+        let mut constraints = negate_at(&state.path_constraints, index);
+        // Add let constraints as equality constraints (y == expr)
+        for (name, expr) in &state.let_constraints {
+            constraints.push((
+                BoolExpr::Eq(Box::new(Expr::Var(name.clone())), Box::new(expr.clone())),
+                true,
+            ));
+        }
+        self.solve(&constraints)
     }
 
     /// Solve constraints and return a satisfying assignment
     pub fn solve(&mut self, constraints: &[(BoolExpr, bool)]) -> Result<Env, SolverError> {
-        let (bounds, remaining) = extract_bounds(constraints)?;
+        // Extract let constraints and build substitution map
+        let (subst, other_constraints) = extract_let_constraints(constraints);
 
-        // Collect all variable names from constraints
+        // Apply substitution to expand let-defined variables
+        let expanded = apply_substitution(&other_constraints, &subst);
+
+        let (bounds, remaining) = extract_bounds(&expanded)?;
+
+        // Collect all variable names from constraints (excluding let-defined variables)
         let mut variables: Vec<String> = bounds.keys().cloned().collect();
         for (expr, _) in &remaining {
             collect_variables_bool(expr, &mut variables);
         }
+        // Remove let-defined variables (they are computed, not sampled)
+        variables.retain(|v| !subst.contains_key(v));
         variables.sort();
         variables.dedup();
 
@@ -367,6 +382,98 @@ fn collect_variables_bool(expr: &BoolExpr, vars: &mut Vec<String>) {
             collect_variables(r, vars);
         }
     }
+}
+
+/// Substitution map: variable name -> expression
+pub type Subst = std::collections::HashMap<String, Expr>;
+
+/// Substitute variables in expression according to substitution map
+fn substitute_expr(expr: &Expr, subst: &Subst) -> Expr {
+    match expr {
+        Expr::Lit(n) => Expr::Lit(*n),
+        Expr::Var(name) => {
+            if let Some(replacement) = subst.get(name) {
+                substitute_expr(replacement, subst)
+            } else {
+                Expr::Var(name.clone())
+            }
+        }
+        Expr::Add(l, r) => Expr::Add(
+            Box::new(substitute_expr(l, subst)),
+            Box::new(substitute_expr(r, subst)),
+        ),
+        Expr::Sub(l, r) => Expr::Sub(
+            Box::new(substitute_expr(l, subst)),
+            Box::new(substitute_expr(r, subst)),
+        ),
+        Expr::If(cond, then_, else_) => Expr::If(
+            Box::new(substitute_bool_expr(cond, subst)),
+            Box::new(substitute_expr(then_, subst)),
+            Box::new(substitute_expr(else_, subst)),
+        ),
+    }
+}
+
+/// Substitute variables in boolean expression according to substitution map
+fn substitute_bool_expr(expr: &BoolExpr, subst: &Subst) -> BoolExpr {
+    match expr {
+        BoolExpr::Lit(b) => BoolExpr::Lit(*b),
+        BoolExpr::Le(l, r) => BoolExpr::Le(
+            Box::new(substitute_expr(l, subst)),
+            Box::new(substitute_expr(r, subst)),
+        ),
+        BoolExpr::Ge(l, r) => BoolExpr::Ge(
+            Box::new(substitute_expr(l, subst)),
+            Box::new(substitute_expr(r, subst)),
+        ),
+        BoolExpr::Eq(l, r) => BoolExpr::Eq(
+            Box::new(substitute_expr(l, subst)),
+            Box::new(substitute_expr(r, subst)),
+        ),
+    }
+}
+
+/// Extract let constraints (y == expr where y is a single variable on LHS)
+/// Returns (substitution_map, remaining_constraints)
+fn extract_let_constraints(constraints: &[(BoolExpr, bool)]) -> (Subst, Vec<(BoolExpr, bool)>) {
+    let mut subst = Subst::new();
+    let mut remaining = Vec::new();
+
+    for (expr, taken) in constraints {
+        // Only process equality constraints that are taken (true)
+        if !taken {
+            remaining.push((expr.clone(), *taken));
+            continue;
+        }
+
+        match expr {
+            BoolExpr::Eq(l, r) => {
+                // Check if LHS is a single variable
+                if let Expr::Var(name) = l.as_ref() {
+                    // This is a let constraint: name == expr
+                    subst.insert(name.clone(), r.as_ref().clone());
+                } else if let Expr::Var(name) = r.as_ref() {
+                    // Also handle expr == name
+                    subst.insert(name.clone(), l.as_ref().clone());
+                } else {
+                    remaining.push((expr.clone(), *taken));
+                }
+            }
+            _ => {
+                remaining.push((expr.clone(), *taken));
+            }
+        }
+    }
+
+    (subst, remaining)
+}
+
+/// Apply substitution to constraints
+fn apply_substitution(constraints: &[(BoolExpr, bool)], subst: &Subst) -> Vec<(BoolExpr, bool)> {
+    constraints
+        .iter()
+        .map(|(expr, taken)| (substitute_bool_expr(expr, subst), *taken))
+        .collect()
 }
 
 /// Generate constraints for exploring an alternative path by negating at index i

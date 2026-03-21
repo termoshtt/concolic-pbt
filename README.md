@@ -77,7 +77,7 @@ let result = state.eval(&expr);  // Returns 4
 The core goal of this project: given a property with conditional branches, automatically find an input that makes it false.
 
 ```rust
-use concolic_pbt::{parse_bool_expr, Explorer, Solver, Stmt, ExploreResult};
+use concolic_pbt::{parse_bool_expr, Explorer, Solver, Stmt, Stmts, ExploreResult};
 use rand::SeedableRng;
 use std::collections::HashMap;
 
@@ -85,7 +85,7 @@ use std::collections::HashMap;
 // This should hold for most inputs, but fails when x > 11
 // (because x - 1 > 10 when x > 11)
 let property = parse_bool_expr("(if x <= 5 then x + 1 else x - 1) <= 10").unwrap();
-let stmt = Stmt::assert(property);
+let stmts = Stmts(vec![Stmt::assert(property)]);
 
 let rng = rand::rngs::StdRng::seed_from_u64(42);
 let solver = Solver::new(rng, 100);
@@ -93,7 +93,7 @@ let mut explorer = Explorer::new(solver, 1000);
 
 // Start with x = 3 (takes the then-branch, satisfies property)
 // Explorer will automatically explore the else-branch and find x > 11
-match explorer.find_counterexample(&stmt, HashMap::from([("x".to_string(), 3)])) {
+match explorer.find_counterexample(&stmts, HashMap::from([("x".to_string(), 3)])) {
     ExploreResult::Counterexample { env, failure } => {
         // Found: x = 149 (or some value > 11)
         // failure is AssertionFailed for the property
