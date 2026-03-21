@@ -33,6 +33,24 @@ pub enum BoolExpr {
     Eq(Box<Expr>, Box<Expr>),
 }
 
+/// Single statement
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stmt {
+    /// Assertion: assert(bool_expr)
+    Assert { expr: BoolExpr },
+}
+
+/// Sequence of statements
+#[derive(Debug, Clone, PartialEq)]
+pub struct Stmts(pub Vec<Stmt>);
+
+impl Stmt {
+    /// Create an assertion statement
+    pub fn assert(expr: BoolExpr) -> Self {
+        Stmt::Assert { expr }
+    }
+}
+
 impl Expr {
     pub fn lit(n: i64) -> Self {
         Expr::Lit(n)
@@ -139,6 +157,26 @@ impl fmt::Display for BoolExpr {
     }
 }
 
+impl fmt::Display for Stmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Stmt::Assert { expr } => write!(f, "assert({})", expr),
+        }
+    }
+}
+
+impl fmt::Display for Stmts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, stmt) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, "; ")?;
+            }
+            write!(f, "{}", stmt)?;
+        }
+        Ok(())
+    }
+}
+
 /// Macro for constructing BoolExpr
 ///
 /// # Examples
@@ -164,7 +202,7 @@ macro_rules! cmp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_bool_expr, parse_expr};
+    use crate::{parse_bool_expr, parse_expr, parse_stmts};
 
     #[test]
     #[should_panic(expected = "Variable name must start with an alphabetic character")]
@@ -191,5 +229,11 @@ mod tests {
     fn display_if_expr() {
         insta::assert_snapshot!(parse_expr("if x <= 5 then x else 10").unwrap(), @"ite(x <= 5, x, 10)");
         insta::assert_snapshot!(parse_bool_expr("(if x <= 5 then x else 10) <= 7").unwrap(), @"ite(x <= 5, x, 10) <= 7");
+    }
+
+    #[test]
+    fn display_stmts() {
+        insta::assert_snapshot!(parse_stmts("assert(x <= 10)").unwrap(), @"assert(x <= 10)");
+        insta::assert_snapshot!(parse_stmts("assert(x >= 0); assert(x <= 10)").unwrap(), @"assert(x >= 0); assert(x <= 10)");
     }
 }

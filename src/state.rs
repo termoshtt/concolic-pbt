@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{BoolExpr, Env, Expr};
+use crate::{BoolExpr, Env, Expr, Stmt, Stmts};
 
 /// Oracle failure types
 ///
@@ -88,6 +88,27 @@ impl ConcolicState {
         }
     }
 
+    /// Execute a single statement, returning Err(OracleFailure) if an assertion fails
+    pub fn exec_stmt(&mut self, stmt: &Stmt) -> Result<(), OracleFailure> {
+        match stmt {
+            Stmt::Assert { expr } => {
+                if self.eval_assert(expr) {
+                    Ok(())
+                } else {
+                    Err(OracleFailure::AssertionFailed { expr: expr.clone() })
+                }
+            }
+        }
+    }
+
+    /// Execute a sequence of statements, returning Err(OracleFailure) if any assertion fails
+    pub fn exec_stmts(&mut self, stmts: &Stmts) -> Result<(), OracleFailure> {
+        for stmt in &stmts.0 {
+            self.exec_stmt(stmt)?;
+        }
+        Ok(())
+    }
+
     /// Format an expression with its concrete value: "x + 1 [=4]"
     fn format_expr(&self, expr: &Expr) -> String {
         let val = expr.eval(&self.env);
@@ -142,7 +163,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::{parse_bool_expr, parse_expr};
+    use crate::{parse_bool_expr, parse_expr, parse_stmts};
 
     #[test]
     fn eval_simple() {
@@ -279,5 +300,41 @@ mod tests {
             state.path_constraints.is_empty(),
             "eval_assert should not record path constraints"
         );
+    }
+
+    #[test]
+    fn exec_assert_pass() {
+        let stmts = parse_stmts("assert(x <= 10)").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        assert!(state.exec_stmts(&stmts).is_ok());
+    }
+
+    #[test]
+    fn exec_assert_fail() {
+        let stmts = parse_stmts("assert(x <= 10)").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 15)]));
+        assert!(matches!(
+            state.exec_stmts(&stmts),
+            Err(OracleFailure::AssertionFailed { .. })
+        ));
+    }
+
+    #[test]
+    fn exec_seq() {
+        // Multiple asserts
+        let stmts = parse_stmts("assert(x >= 0); assert(x <= 10)").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        assert!(state.exec_stmts(&stmts).is_ok());
+    }
+
+    #[test]
+    fn exec_seq_early_fail() {
+        // First assert fails, second is not reached
+        let stmts = parse_stmts("assert(x <= 0); assert(x >= 10)").unwrap();
+        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
+        assert!(matches!(
+            state.exec_stmts(&stmts),
+            Err(OracleFailure::AssertionFailed { .. })
+        ));
     }
 }

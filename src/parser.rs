@@ -17,7 +17,7 @@
 
 use chumsky::prelude::*;
 
-use crate::{BoolExpr, Expr};
+use crate::{BoolExpr, Expr, Stmt, Stmts};
 
 #[derive(Clone, Copy)]
 enum BoolOp {
@@ -38,13 +38,16 @@ fn number<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> + 
         .padded()
 }
 
+/// Reserved keywords
+const KEYWORDS: &[&str] = &["if", "then", "else", "true", "false", "let", "assert"];
+
 /// Variable: lowercase letter followed by alphanumeric/underscore
 /// Keywords are excluded by checking against reserved words
 fn var<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>>> + Clone {
     text::ident()
         .try_map(|s: &str, span| {
             let first = s.chars().next().unwrap();
-            if first.is_ascii_lowercase() && !["if", "then", "else", "true", "false"].contains(&s) {
+            if first.is_ascii_lowercase() && !KEYWORDS.contains(&s) {
                 Ok(Expr::Var(s.to_string()))
             } else {
                 Err(Rich::custom(
@@ -163,6 +166,31 @@ pub fn parse_expr(input: &str) -> Result<Expr, Vec<Rich<'_, char>>> {
 /// Parse a boolean expression from a string
 pub fn parse_bool_expr(input: &str) -> Result<BoolExpr, Vec<Rich<'_, char>>> {
     bool_expr_parser().parse(input).into_result()
+}
+
+/// Parser for a single statement (Stmt)
+fn stmt_parser<'a>() -> impl Parser<'a, &'a str, Stmt, extra::Err<Rich<'a, char>>> + Clone {
+    let bool_expr = bool_expr_parser();
+
+    // assert statement: assert(bool_expr)
+    text::keyword("assert")
+        .padded()
+        .ignore_then(bool_expr.delimited_by(just('(').padded(), just(')').padded()))
+        .map(|expr| Stmt::Assert { expr })
+}
+
+/// Parser for a sequence of statements (Stmts)
+fn stmts_parser<'a>() -> impl Parser<'a, &'a str, Stmts, extra::Err<Rich<'a, char>>> + Clone {
+    stmt_parser()
+        .separated_by(just(';').padded())
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .map(Stmts)
+}
+
+/// Parse a sequence of statements from a string
+pub fn parse_stmts(input: &str) -> Result<Stmts, Vec<Rich<'_, char>>> {
+    stmts_parser().parse(input).into_result()
 }
 
 #[cfg(test)]
@@ -318,6 +346,42 @@ mod tests {
                 )),
                 Box::new(Expr::Lit(7))
             )
+        );
+    }
+
+    #[test]
+    fn parse_assert_stmt() {
+        let result = parse_stmts("assert(x <= 10)").unwrap();
+        assert_eq!(
+            result,
+            Stmts(vec![Stmt::Assert {
+                expr: BoolExpr::Le(
+                    Box::new(Expr::Var("x".to_string())),
+                    Box::new(Expr::Lit(10))
+                )
+            }])
+        );
+    }
+
+    #[test]
+    fn parse_seq_stmts() {
+        let result = parse_stmts("assert(x >= 0); assert(x <= 10)").unwrap();
+        assert_eq!(
+            result,
+            Stmts(vec![
+                Stmt::Assert {
+                    expr: BoolExpr::Ge(
+                        Box::new(Expr::Var("x".to_string())),
+                        Box::new(Expr::Lit(0))
+                    )
+                },
+                Stmt::Assert {
+                    expr: BoolExpr::Le(
+                        Box::new(Expr::Var("x".to_string())),
+                        Box::new(Expr::Lit(10))
+                    )
+                }
+            ])
         );
     }
 }
