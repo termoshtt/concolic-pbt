@@ -117,22 +117,7 @@ impl<R: rand::Rng> Explorer<R> {
 
         // Step 1: Try to find counterexample on this path by negating each assertion
         for assertion in &assertions {
-            let mut constraints = state.path_constraints.clone();
-            // Add let constraints as equality constraints
-            for (ssa_var, expr) in &state.let_constraints {
-                constraints.push((
-                    BoolExpr::Eq(
-                        Box::new(crate::Expr::Var(ssa_var.to_string())),
-                        Box::new(expr.clone()),
-                    ),
-                    true,
-                ));
-            }
-            // Convert assertion to SSA form
-            let ssa_assertion = state.to_ssa_bool_expr(assertion);
-            constraints.push((ssa_assertion, false));
-
-            if let Ok(new_env) = self.solver.solve(&constraints) {
+            if let Ok(new_env) = self.solver.find_counterexample(&state, assertion) {
                 // Verify the counterexample (solver might give approximate solution)
                 let mut new_state = ConcolicState::new(new_env.clone());
                 if let Err(failure) = new_state.exec_stmts(stmts) {
