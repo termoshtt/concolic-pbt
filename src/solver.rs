@@ -618,14 +618,12 @@ mod tests {
         match expr {
             Expr::Lit(n) => Expr::Lit(*n),
             Expr::Var(name) => Expr::Var(SsaVar::new(name, 0)),
-            Expr::Add(l, r) => Expr::Add(
-                Box::new(ast_to_symbolic(l)),
-                Box::new(ast_to_symbolic(r)),
-            ),
-            Expr::Sub(l, r) => Expr::Sub(
-                Box::new(ast_to_symbolic(l)),
-                Box::new(ast_to_symbolic(r)),
-            ),
+            Expr::Add(l, r) => {
+                Expr::Add(Box::new(ast_to_symbolic(l)), Box::new(ast_to_symbolic(r)))
+            }
+            Expr::Sub(l, r) => {
+                Expr::Sub(Box::new(ast_to_symbolic(l)), Box::new(ast_to_symbolic(r)))
+            }
             Expr::If(cond, branches) => {
                 // For test purposes, convert both branches to Symbolic
                 // (representing a "fully evaluated" ite, which isn't realistic
@@ -645,18 +643,15 @@ mod tests {
     fn ast_to_symbolic_bool(expr: &BoolExpr<Ast>) -> BoolExpr<Symbolic> {
         match expr {
             BoolExpr::Lit(b) => BoolExpr::Lit(*b),
-            BoolExpr::Le(l, r) => BoolExpr::Le(
-                Box::new(ast_to_symbolic(l)),
-                Box::new(ast_to_symbolic(r)),
-            ),
-            BoolExpr::Ge(l, r) => BoolExpr::Ge(
-                Box::new(ast_to_symbolic(l)),
-                Box::new(ast_to_symbolic(r)),
-            ),
-            BoolExpr::Eq(l, r) => BoolExpr::Eq(
-                Box::new(ast_to_symbolic(l)),
-                Box::new(ast_to_symbolic(r)),
-            ),
+            BoolExpr::Le(l, r) => {
+                BoolExpr::Le(Box::new(ast_to_symbolic(l)), Box::new(ast_to_symbolic(r)))
+            }
+            BoolExpr::Ge(l, r) => {
+                BoolExpr::Ge(Box::new(ast_to_symbolic(l)), Box::new(ast_to_symbolic(r)))
+            }
+            BoolExpr::Eq(l, r) => {
+                BoolExpr::Eq(Box::new(ast_to_symbolic(l)), Box::new(ast_to_symbolic(r)))
+            }
         }
     }
 

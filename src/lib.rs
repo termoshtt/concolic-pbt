@@ -12,4 +12,4 @@ pub use node::{
 };
 pub use parser::{parse_bool_expr, parse_expr, parse_stmts};
 pub use solver::{Bound, Bounds, Constraints, Solver, SolverError, extract_bounds, negate_at};
-pub use state::{exec, ExecutionTrace, OracleFailure};
+pub use state::{ExecutionTrace, OracleFailure, exec};

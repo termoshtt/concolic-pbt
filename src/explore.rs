@@ -189,7 +189,7 @@ impl<R> fmt::Display for Explorer<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_bool_expr, Stmt};
+    use crate::{Stmt, parse_bool_expr};
     use rand::SeedableRng;
     use std::collections::HashMap;
 
