@@ -271,29 +271,71 @@ impl<R: rand::Rng> Solver<R> {
         Self { rng, max_attempts }
     }
 
+    /// Build substitution map from let constraints
+    fn build_subst(state: &ConcolicState) -> Subst {
+        state
+            .let_constraints
+            .iter()
+            .map(|(ssa_var, expr)| (ssa_var.to_string(), expr.clone()))
+            .collect()
+    }
+
     /// Try to find an input that explores an alternative path
     pub fn find_alternative(
         &mut self,
         state: &ConcolicState,
         index: usize,
     ) -> Result<Env, SolverError> {
-        let negated = negate_at(&state.path_constraints, index);
-        self.solve(&negated)
+        let constraints = negate_at(&state.path_constraints, index);
+        let subst = Self::build_subst(state);
+        let expanded = apply_substitution(&constraints, &subst);
+        self.solve(&expanded, &subst)
+    }
+
+    /// Try to find an input that violates the given assertion
+    pub fn find_counterexample(
+        &mut self,
+        state: &ConcolicState,
+        assertion: &BoolExpr,
+    ) -> Result<Env, SolverError> {
+        let mut constraints = state.path_constraints.clone();
+        // Negate the assertion
+        let ssa_assertion = state.to_ssa_bool_expr(assertion);
+        constraints.push((ssa_assertion, false));
+
+        let subst = Self::build_subst(state);
+        let expanded = apply_substitution(&constraints, &subst);
+        self.solve(&expanded, &subst)
     }
 
     /// Solve constraints and return a satisfying assignment
-    pub fn solve(&mut self, constraints: &[(BoolExpr, bool)]) -> Result<Env, SolverError> {
+    ///
+    /// Takes already-expanded constraints (let variables substituted)
+    /// and the substitution map (to exclude let-defined variables from sampling).
+    fn solve(
+        &mut self,
+        constraints: &[(BoolExpr, bool)],
+        subst: &Subst,
+    ) -> Result<Env, SolverError> {
         let (bounds, remaining) = extract_bounds(constraints)?;
 
-        // Collect all variable names from constraints
+        // Collect all variable names from constraints (excluding let-defined variables)
         let mut variables: Vec<String> = bounds.keys().cloned().collect();
         for (expr, _) in &remaining {
             collect_variables_bool(expr, &mut variables);
         }
+        // Remove let-defined variables (they are computed, not sampled)
+        variables.retain(|v| !subst.contains_key(v));
         variables.sort();
         variables.dedup();
 
         self.sample(&bounds, &remaining, &variables)
+    }
+
+    /// Solve constraints without let expansion (for testing)
+    #[cfg(test)]
+    fn solve_constraints(&mut self, constraints: &[(BoolExpr, bool)]) -> Result<Env, SolverError> {
+        self.solve(constraints, &Subst::new())
     }
 
     /// Sample an Env that satisfies bounds and remaining constraints
@@ -367,6 +409,63 @@ fn collect_variables_bool(expr: &BoolExpr, vars: &mut Vec<String>) {
             collect_variables(r, vars);
         }
     }
+}
+
+/// Substitution map: variable name -> expression
+pub type Subst = std::collections::HashMap<String, Expr>;
+
+/// Substitute variables in expression according to substitution map
+fn substitute_expr(expr: &Expr, subst: &Subst) -> Expr {
+    match expr {
+        Expr::Lit(n) => Expr::Lit(*n),
+        Expr::Var(name) => {
+            if let Some(replacement) = subst.get(name) {
+                substitute_expr(replacement, subst)
+            } else {
+                Expr::Var(name.clone())
+            }
+        }
+        Expr::Add(l, r) => Expr::Add(
+            Box::new(substitute_expr(l, subst)),
+            Box::new(substitute_expr(r, subst)),
+        ),
+        Expr::Sub(l, r) => Expr::Sub(
+            Box::new(substitute_expr(l, subst)),
+            Box::new(substitute_expr(r, subst)),
+        ),
+        Expr::If(cond, then_, else_) => Expr::If(
+            Box::new(substitute_bool_expr(cond, subst)),
+            Box::new(substitute_expr(then_, subst)),
+            Box::new(substitute_expr(else_, subst)),
+        ),
+    }
+}
+
+/// Substitute variables in boolean expression according to substitution map
+fn substitute_bool_expr(expr: &BoolExpr, subst: &Subst) -> BoolExpr {
+    match expr {
+        BoolExpr::Lit(b) => BoolExpr::Lit(*b),
+        BoolExpr::Le(l, r) => BoolExpr::Le(
+            Box::new(substitute_expr(l, subst)),
+            Box::new(substitute_expr(r, subst)),
+        ),
+        BoolExpr::Ge(l, r) => BoolExpr::Ge(
+            Box::new(substitute_expr(l, subst)),
+            Box::new(substitute_expr(r, subst)),
+        ),
+        BoolExpr::Eq(l, r) => BoolExpr::Eq(
+            Box::new(substitute_expr(l, subst)),
+            Box::new(substitute_expr(r, subst)),
+        ),
+    }
+}
+
+/// Apply substitution to constraints
+fn apply_substitution(constraints: &[(BoolExpr, bool)], subst: &Subst) -> Vec<(BoolExpr, bool)> {
+    constraints
+        .iter()
+        .map(|(expr, taken)| (substitute_bool_expr(expr, subst), *taken))
+        .collect()
 }
 
 /// Generate constraints for exploring an alternative path by negating at index i
@@ -506,7 +605,7 @@ mod tests {
         let constraints = vec![(parse_bool_expr("x <= 5").unwrap(), true)];
 
         let mut solver = Solver::new(rand::rng(), 100);
-        let env = solver.solve(&constraints).unwrap();
+        let env = solver.solve_constraints(&constraints).unwrap();
         assert!(env["x"] <= 5);
     }
 
@@ -520,7 +619,7 @@ mod tests {
         ];
 
         let mut solver = Solver::new(rand::rng(), 1000);
-        let env = solver.solve(&constraints).unwrap();
+        let env = solver.solve_constraints(&constraints).unwrap();
         assert!(env["x"] <= 10);
         assert!(env["x"] <= env["y"]);
     }
@@ -550,7 +649,7 @@ mod tests {
         let expr = parse_expr("if x <= 5 then x + 1 else 0").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
-        state.eval(&expr);
+        state.eval(&expr).unwrap();
 
         // Should have path constraint: x <= 5 : true
         assert_eq!(state.path_constraints.len(), 1);
@@ -578,7 +677,7 @@ mod tests {
         // Should find x such that (if x <= 5 then x else 10) <= 7
         // This requires x <= 5 (since 10 > 7)
         for _ in 0..10 {
-            let env = solver.solve(&constraints).unwrap();
+            let env = solver.solve_constraints(&constraints).unwrap();
             assert!(env["x"] <= 5, "x = {} should be <= 5", env["x"]);
         }
     }
