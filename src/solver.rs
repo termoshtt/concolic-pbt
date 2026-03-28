@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use crate::{BoolExpr, ConcolicState, Env, Expr};
+use crate::state::ExecutionTrace;
+use crate::{BoolExpr, Env, Expr, SsaVar};
 
 /// Error during constraint solving
 #[derive(Debug, Clone, PartialEq)]
@@ -272,9 +273,8 @@ impl<R: rand::Rng> Solver<R> {
     }
 
     /// Build substitution map from let constraints
-    fn build_subst(state: &ConcolicState) -> Subst {
-        state
-            .let_constraints
+    fn build_subst(let_constraints: &[(SsaVar, Expr)]) -> Subst {
+        let_constraints
             .iter()
             .map(|(ssa_var, expr)| (ssa_var.to_string(), expr.clone()))
             .collect()
@@ -283,27 +283,26 @@ impl<R: rand::Rng> Solver<R> {
     /// Try to find an input that explores an alternative path
     pub fn find_alternative(
         &mut self,
-        state: &ConcolicState,
+        trace: &ExecutionTrace,
         index: usize,
     ) -> Result<Env, SolverError> {
-        let constraints = negate_at(&state.path_constraints, index);
-        let subst = Self::build_subst(state);
+        let constraints = negate_at(&trace.path_constraints, index);
+        let subst = Self::build_subst(&trace.let_constraints);
         let expanded = apply_substitution(&constraints, &subst);
         self.solve(&expanded, &subst)
     }
 
-    /// Try to find an input that violates the given assertion
+    /// Try to find an input that violates the given assertion (already in SSA form)
     pub fn find_counterexample(
         &mut self,
-        state: &ConcolicState,
-        assertion: &BoolExpr,
+        trace: &ExecutionTrace,
+        ssa_assertion: &BoolExpr,
     ) -> Result<Env, SolverError> {
-        let mut constraints = state.path_constraints.clone();
+        let mut constraints = trace.path_constraints.clone();
         // Negate the assertion
-        let ssa_assertion = state.to_ssa_bool_expr(assertion);
-        constraints.push((ssa_assertion, false));
+        constraints.push((ssa_assertion.clone(), false));
 
-        let subst = Self::build_subst(state);
+        let subst = Self::build_subst(&trace.let_constraints);
         let expanded = apply_substitution(&constraints, &subst);
         self.solve(&expanded, &subst)
     }
@@ -508,7 +507,7 @@ pub fn negate_at(constraints: &[(BoolExpr, bool)], i: usize) -> Vec<(BoolExpr, b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{parse_bool_expr, parse_expr};
+    use crate::parse_bool_expr;
 
     #[test]
     fn bound_basic() {
@@ -641,23 +640,22 @@ mod tests {
 
     #[test]
     fn find_alternative_test() {
-        use crate::ConcolicState;
+        use crate::state::exec;
         use std::collections::HashMap;
 
         // Simulate: if x <= 5 then ... else ...
         // Took the then branch (x <= 5 was true)
-        let expr = parse_expr("if x <= 5 then x + 1 else 0").unwrap();
-
-        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
-        state.eval(&expr).unwrap();
+        // Use a let statement to capture the expression evaluation
+        let stmts = crate::parse_stmts("let y = if x <= 5 then x + 1 else 0").unwrap();
+        let trace = exec(&stmts, HashMap::from([("x".to_string(), 3)]));
 
         // Should have path constraint: x <= 5 : true
-        assert_eq!(state.path_constraints.len(), 1);
-        assert!(state.path_constraints[0].1);
+        assert_eq!(trace.path_constraints.len(), 1);
+        assert!(trace.path_constraints[0].1);
 
         // Find alternative (negate the constraint)
         let mut solver = Solver::new(rand::rng(), 100);
-        let alt_env = solver.find_alternative(&state, 0).unwrap();
+        let alt_env = solver.find_alternative(&trace, 0).unwrap();
 
         // Should find x > 5
         assert!(alt_env["x"] > 5);

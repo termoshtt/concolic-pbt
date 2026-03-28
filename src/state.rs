@@ -51,9 +51,37 @@ impl fmt::Display for SsaVar {
     }
 }
 
-/// State for concolic execution
+/// Result of executing a sequence of statements (immutable)
 #[derive(Debug, Clone)]
-pub struct ConcolicState {
+pub struct ExecutionTrace {
+    /// Input environment
+    pub env: Env,
+    /// Collected path constraints (with the branch direction taken)
+    pub path_constraints: Vec<(BoolExpr, bool)>,
+    /// Let binding constraints in SSA form
+    pub let_constraints: Vec<(SsaVar, Expr)>,
+    /// Assertions that passed during execution (in SSA form)
+    pub passed_asserts: Vec<BoolExpr>,
+    /// Execution result (Ok if all assertions passed, Err if one failed)
+    pub result: Result<(), OracleFailure>,
+}
+
+/// Execute statements and return the execution trace
+pub fn exec(stmts: &Stmts, env: Env) -> ExecutionTrace {
+    let mut state = ConcolicState::new(env);
+    let result = state.exec_stmts(stmts);
+    ExecutionTrace {
+        env: state.env,
+        path_constraints: state.path_constraints,
+        let_constraints: state.let_constraints,
+        passed_asserts: state.passed_asserts,
+        result,
+    }
+}
+
+/// Internal state for concolic execution (one statement at a time)
+#[derive(Debug, Clone)]
+pub(crate) struct ConcolicState {
     /// Concrete values for variables
     pub env: Env,
     /// Collected path constraints (with the branch direction taken)
@@ -69,6 +97,8 @@ pub struct ConcolicState {
     /// - ((y, 0), x + 1)
     /// - ((y, 1), (y, 0) + 1)
     pub let_constraints: Vec<(SsaVar, Expr)>,
+    /// Assertions that passed during execution (in SSA form)
+    pub passed_asserts: Vec<BoolExpr>,
     /// Current version for each variable name
     versions: std::collections::HashMap<String, usize>,
 }
@@ -79,6 +109,7 @@ impl ConcolicState {
             env,
             path_constraints: Vec::new(),
             let_constraints: Vec::new(),
+            passed_asserts: Vec::new(),
             versions: std::collections::HashMap::new(),
         }
     }
@@ -191,6 +222,9 @@ impl ConcolicState {
         match stmt {
             Stmt::Assert { expr } => {
                 if self.eval_assert(expr)? {
+                    // Record the assertion in SSA form
+                    let ssa_expr = self.to_ssa_bool_expr(expr);
+                    self.passed_asserts.push(ssa_expr);
                     Ok(())
                 } else {
                     Err(OracleFailure::AssertionFailed { expr: expr.clone() })
