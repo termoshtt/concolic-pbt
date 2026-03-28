@@ -5,44 +5,128 @@ use std::ops::{Add, Sub};
 /// Environment mapping variable names to concrete values
 pub type Env = HashMap<String, i64>;
 
+/// Marker trait for expression stages
+pub trait Stage: Sized {
+    type Var: Clone + PartialEq + fmt::Debug + fmt::Display;
+    /// Type for If expression branches (allows mixing stages in Symbolic)
+    type IfBranches: Clone + PartialEq + fmt::Debug + fmt::Display;
+}
+
+/// AST stage: parsed expressions before evaluation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ast;
+
+impl Stage for Ast {
+    type Var = String;
+    type IfBranches = AstIfBranches;
+}
+
+/// Symbolic stage: expressions with SSA-converted variables
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Symbolic;
+
+impl Stage for Symbolic {
+    type Var = SsaVar;
+    type IfBranches = SymIfBranches;
+}
+
+/// If branches for AST stage (both branches are Ast)
+#[derive(Debug, Clone, PartialEq)]
+pub struct AstIfBranches {
+    pub then_: Box<Expr<Ast>>,
+    pub else_: Box<Expr<Ast>>,
+}
+
+/// If branches for Symbolic stage (one evaluated, one not)
+#[derive(Debug, Clone, PartialEq)]
+pub enum SymIfBranches {
+    /// Then branch was taken (evaluated to Symbolic)
+    ThenTaken {
+        then_: Box<Expr<Symbolic>>,
+        else_: Box<Expr<Ast>>,
+    },
+    /// Else branch was taken (evaluated to Symbolic)
+    ElseTaken {
+        then_: Box<Expr<Ast>>,
+        else_: Box<Expr<Symbolic>>,
+    },
+}
+
+impl fmt::Display for AstIfBranches {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}, {}", self.then_, self.else_)
+    }
+}
+
+impl fmt::Display for SymIfBranches {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SymIfBranches::ThenTaken { then_, else_ } => write!(f, "{}, {}", then_, else_),
+            SymIfBranches::ElseTaken { then_, else_ } => write!(f, "{}, {}", then_, else_),
+        }
+    }
+}
+
+/// SSA-style variable identifier: (name, version)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SsaVar {
+    pub name: String,
+    pub version: usize,
+}
+
+impl SsaVar {
+    pub fn new(name: impl Into<String>, version: usize) -> Self {
+        Self {
+            name: name.into(),
+            version,
+        }
+    }
+}
+
+impl fmt::Display for SsaVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.name, self.version)
+    }
+}
+
 /// Abstract Syntax Tree for integer expressions
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum Expr<S: Stage = Ast> {
     /// Integer literal
     Lit(i64),
-    /// Variable reference by name
-    Var(String),
+    /// Variable reference
+    Var(S::Var),
     /// Addition
-    Add(Box<Expr>, Box<Expr>),
+    Add(Box<Expr<S>>, Box<Expr<S>>),
     /// Subtraction
-    Sub(Box<Expr>, Box<Expr>),
+    Sub(Box<Expr<S>>, Box<Expr<S>>),
     /// Conditional expression
-    If(Box<BoolExpr>, Box<Expr>, Box<Expr>),
+    If(Box<BoolExpr<S>>, S::IfBranches),
 }
 
 /// Boolean expressions
 #[derive(Debug, Clone, PartialEq)]
-pub enum BoolExpr {
+pub enum BoolExpr<S: Stage = Ast> {
     /// Boolean literal
     Lit(bool),
     /// Less than or equal (<=)
-    Le(Box<Expr>, Box<Expr>),
+    Le(Box<Expr<S>>, Box<Expr<S>>),
     /// Greater than or equal (>=)
-    Ge(Box<Expr>, Box<Expr>),
+    Ge(Box<Expr<S>>, Box<Expr<S>>),
     /// Equal (==)
-    Eq(Box<Expr>, Box<Expr>),
+    Eq(Box<Expr<S>>, Box<Expr<S>>),
 }
 
-/// Single statement
+/// Single statement (always in AST stage)
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     /// Assertion: assert(bool_expr)
-    Assert { expr: BoolExpr },
+    Assert { expr: BoolExpr<Ast> },
     /// Variable binding: let name = expr
     ///
     /// The binding introduces a constraint `name == expr` for the solver,
     /// without expanding `name` in subsequent expressions.
-    Let { name: String, expr: Expr },
+    Let { name: String, expr: Expr<Ast> },
 }
 
 /// Sequence of statements
@@ -63,12 +147,12 @@ impl<T: Into<Stmt>> FromIterator<T> for Stmts {
 
 impl Stmt {
     /// Create an assertion statement
-    pub fn assert(expr: BoolExpr) -> Self {
+    pub fn assert(expr: BoolExpr<Ast>) -> Self {
         Stmt::Assert { expr }
     }
 
     /// Create a let binding statement
-    pub fn let_(name: impl Into<String>, expr: Expr) -> Self {
+    pub fn let_(name: impl Into<String>, expr: Expr<Ast>) -> Self {
         Stmt::Let {
             name: name.into(),
             expr,
@@ -76,7 +160,7 @@ impl Stmt {
     }
 }
 
-impl Expr {
+impl Expr<Ast> {
     pub fn lit(n: i64) -> Self {
         Expr::Lit(n)
     }
@@ -91,19 +175,26 @@ impl Expr {
         Expr::Var(name)
     }
 
-    pub fn if_(cond: BoolExpr, then_: Expr, else_: Expr) -> Self {
-        Expr::If(Box::new(cond), Box::new(then_), Box::new(else_))
+    /// Create an if-then-else expression
+    pub fn if_(cond: BoolExpr<Ast>, then_: Expr<Ast>, else_: Expr<Ast>) -> Self {
+        Expr::If(
+            Box::new(cond),
+            AstIfBranches {
+                then_: Box::new(then_),
+                else_: Box::new(else_),
+            },
+        )
     }
 
-    pub fn le(self, rhs: Expr) -> BoolExpr {
+    pub fn le(self, rhs: Expr<Ast>) -> BoolExpr<Ast> {
         BoolExpr::Le(Box::new(self), Box::new(rhs))
     }
 
-    pub fn ge(self, rhs: Expr) -> BoolExpr {
+    pub fn ge(self, rhs: Expr<Ast>) -> BoolExpr<Ast> {
         BoolExpr::Ge(Box::new(self), Box::new(rhs))
     }
 
-    pub fn eq_(self, rhs: Expr) -> BoolExpr {
+    pub fn eq_(self, rhs: Expr<Ast>) -> BoolExpr<Ast> {
         BoolExpr::Eq(Box::new(self), Box::new(rhs))
     }
 
@@ -114,18 +205,39 @@ impl Expr {
             Expr::Var(name) => env[name],
             Expr::Add(l, r) => l.eval(env) + r.eval(env),
             Expr::Sub(l, r) => l.eval(env) - r.eval(env),
-            Expr::If(cond, then_, else_) => {
+            Expr::If(cond, branches) => {
                 if cond.eval(env) {
-                    then_.eval(env)
+                    branches.then_.eval(env)
                 } else {
-                    else_.eval(env)
+                    branches.else_.eval(env)
                 }
+            }
+        }
+    }
+
+    /// Collect all variable names in this expression
+    pub fn collect_variables(&self, vars: &mut Vec<String>) {
+        match self {
+            Expr::Lit(_) => {}
+            Expr::Var(name) => {
+                if !vars.contains(name) {
+                    vars.push(name.clone());
+                }
+            }
+            Expr::Add(l, r) | Expr::Sub(l, r) => {
+                l.collect_variables(vars);
+                r.collect_variables(vars);
+            }
+            Expr::If(cond, branches) => {
+                cond.collect_variables(vars);
+                branches.then_.collect_variables(vars);
+                branches.else_.collect_variables(vars);
             }
         }
     }
 }
 
-impl BoolExpr {
+impl BoolExpr<Ast> {
     pub fn lit(b: bool) -> Self {
         BoolExpr::Lit(b)
     }
@@ -139,39 +251,94 @@ impl BoolExpr {
             BoolExpr::Eq(l, r) => l.eval(env) == r.eval(env),
         }
     }
+
+    /// Collect all variable names in this expression
+    pub fn collect_variables(&self, vars: &mut Vec<String>) {
+        match self {
+            BoolExpr::Lit(_) => {}
+            BoolExpr::Le(l, r) | BoolExpr::Ge(l, r) | BoolExpr::Eq(l, r) => {
+                l.collect_variables(vars);
+                r.collect_variables(vars);
+            }
+        }
+    }
 }
 
-impl Add for Expr {
-    type Output = Expr;
+impl Add for Expr<Ast> {
+    type Output = Expr<Ast>;
 
-    fn add(self, rhs: Expr) -> Self::Output {
+    fn add(self, rhs: Expr<Ast>) -> Self::Output {
         Expr::Add(Box::new(self), Box::new(rhs))
     }
 }
 
-impl Sub for Expr {
-    type Output = Expr;
+impl Sub for Expr<Ast> {
+    type Output = Expr<Ast>;
 
-    fn sub(self, rhs: Expr) -> Self::Output {
+    fn sub(self, rhs: Expr<Ast>) -> Self::Output {
         Expr::Sub(Box::new(self), Box::new(rhs))
     }
 }
 
-impl fmt::Display for Expr {
+impl Expr<Symbolic> {
+    /// Collect all variable names in this expression
+    pub fn collect_variables(&self, vars: &mut Vec<String>) {
+        match self {
+            Expr::Lit(_) => {}
+            Expr::Var(ssa_var) => {
+                if !vars.contains(&ssa_var.name) {
+                    vars.push(ssa_var.name.clone());
+                }
+            }
+            Expr::Add(l, r) | Expr::Sub(l, r) => {
+                l.collect_variables(vars);
+                r.collect_variables(vars);
+            }
+            Expr::If(cond, branches) => {
+                cond.collect_variables(vars);
+                match branches {
+                    SymIfBranches::ThenTaken { then_, else_ } => {
+                        then_.collect_variables(vars);
+                        else_.collect_variables(vars);
+                    }
+                    SymIfBranches::ElseTaken { then_, else_ } => {
+                        then_.collect_variables(vars);
+                        else_.collect_variables(vars);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl BoolExpr<Symbolic> {
+    /// Collect all variable names in this expression
+    pub fn collect_variables(&self, vars: &mut Vec<String>) {
+        match self {
+            BoolExpr::Lit(_) => {}
+            BoolExpr::Le(l, r) | BoolExpr::Ge(l, r) | BoolExpr::Eq(l, r) => {
+                l.collect_variables(vars);
+                r.collect_variables(vars);
+            }
+        }
+    }
+}
+
+impl<S: Stage> fmt::Display for Expr<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Expr::Lit(n) => write!(f, "{}", n),
             Expr::Var(name) => write!(f, "{}", name),
             Expr::Add(l, r) => write!(f, "{} + {}", l, r),
             Expr::Sub(l, r) => write!(f, "{} - {}", l, r),
-            Expr::If(cond, then_, else_) => {
-                write!(f, "ite({}, {}, {})", cond, then_, else_)
+            Expr::If(cond, branches) => {
+                write!(f, "ite({}, {})", cond, branches)
             }
         }
     }
 }
 
-impl fmt::Display for BoolExpr {
+impl<S: Stage> fmt::Display for BoolExpr<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BoolExpr::Lit(b) => write!(f, "{}", b),
