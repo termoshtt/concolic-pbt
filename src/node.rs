@@ -175,6 +175,7 @@ impl Expr<Ast> {
         Expr::Var(name)
     }
 
+    /// Create an if-then-else expression
     pub fn if_(cond: BoolExpr<Ast>, then_: Expr<Ast>, else_: Expr<Ast>) -> Self {
         Expr::If(
             Box::new(cond),
