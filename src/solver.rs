@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::state::ExecutionTrace;
-use crate::{BoolExpr, Env, Expr, SsaVar, Symbolic};
+use crate::{Ast, BoolExpr, Env, Expr, SsaVar, SymIfBranches, Symbolic};
 
 /// Error during constraint solving
 #[derive(Debug, Clone, PartialEq)]
@@ -90,7 +90,7 @@ fn contains_ite(expr: &Expr<Symbolic>) -> bool {
     match expr {
         Expr::Lit(_) | Expr::Var(_) => false,
         Expr::Add(l, r) | Expr::Sub(l, r) => contains_ite(l) || contains_ite(r),
-        Expr::If(_, _, _) => true,
+        Expr::If(_, _) => true,
     }
 }
 
@@ -389,11 +389,25 @@ fn eval_symbolic(expr: &Expr<Symbolic>, env: &Env) -> i64 {
         Expr::Var(ssa_var) => env[&ssa_var.name],
         Expr::Add(l, r) => eval_symbolic(l, env) + eval_symbolic(r, env),
         Expr::Sub(l, r) => eval_symbolic(l, env) - eval_symbolic(r, env),
-        Expr::If(cond, then_, else_) => {
-            if eval_symbolic_bool(cond, env) {
-                eval_symbolic(then_, env)
-            } else {
-                eval_symbolic(else_, env)
+        Expr::If(cond, branches) => {
+            let cond_val = eval_symbolic_bool(cond, env);
+            match branches {
+                SymIfBranches::ThenTaken { then_, else_ } => {
+                    if cond_val {
+                        eval_symbolic(then_, env)
+                    } else {
+                        // Evaluate the Ast branch
+                        else_.eval(env)
+                    }
+                }
+                SymIfBranches::ElseTaken { then_, else_ } => {
+                    if cond_val {
+                        // Evaluate the Ast branch
+                        then_.eval(env)
+                    } else {
+                        eval_symbolic(else_, env)
+                    }
+                }
             }
         }
     }
@@ -406,6 +420,38 @@ fn eval_symbolic_bool(expr: &BoolExpr<Symbolic>, env: &Env) -> bool {
         BoolExpr::Le(l, r) => eval_symbolic(l, env) <= eval_symbolic(r, env),
         BoolExpr::Ge(l, r) => eval_symbolic(l, env) >= eval_symbolic(r, env),
         BoolExpr::Eq(l, r) => eval_symbolic(l, env) == eval_symbolic(r, env),
+    }
+}
+
+/// Collect variable names from Ast expression
+fn collect_variables_ast(expr: &Expr<Ast>, vars: &mut Vec<String>) {
+    match expr {
+        Expr::Lit(_) => {}
+        Expr::Var(name) => {
+            if !vars.contains(name) {
+                vars.push(name.clone());
+            }
+        }
+        Expr::Add(l, r) | Expr::Sub(l, r) => {
+            collect_variables_ast(l, vars);
+            collect_variables_ast(r, vars);
+        }
+        Expr::If(cond, branches) => {
+            collect_variables_ast_bool(cond, vars);
+            collect_variables_ast(&branches.then_, vars);
+            collect_variables_ast(&branches.else_, vars);
+        }
+    }
+}
+
+/// Collect variable names from Ast boolean expression
+fn collect_variables_ast_bool(expr: &BoolExpr<Ast>, vars: &mut Vec<String>) {
+    match expr {
+        BoolExpr::Lit(_) => {}
+        BoolExpr::Le(l, r) | BoolExpr::Ge(l, r) | BoolExpr::Eq(l, r) => {
+            collect_variables_ast(l, vars);
+            collect_variables_ast(r, vars);
+        }
     }
 }
 
@@ -422,10 +468,18 @@ fn collect_variables(expr: &Expr<Symbolic>, vars: &mut Vec<String>) {
             collect_variables(l, vars);
             collect_variables(r, vars);
         }
-        Expr::If(cond, then_, else_) => {
+        Expr::If(cond, branches) => {
             collect_variables_bool(cond, vars);
-            collect_variables(then_, vars);
-            collect_variables(else_, vars);
+            match branches {
+                SymIfBranches::ThenTaken { then_, else_ } => {
+                    collect_variables(then_, vars);
+                    collect_variables_ast(else_, vars);
+                }
+                SymIfBranches::ElseTaken { then_, else_ } => {
+                    collect_variables_ast(then_, vars);
+                    collect_variables(else_, vars);
+                }
+            }
         }
     }
 }
@@ -464,11 +518,20 @@ fn substitute_expr(expr: &Expr<Symbolic>, subst: &Subst) -> Expr<Symbolic> {
             Box::new(substitute_expr(l, subst)),
             Box::new(substitute_expr(r, subst)),
         ),
-        Expr::If(cond, then_, else_) => Expr::If(
-            Box::new(substitute_bool_expr(cond, subst)),
-            Box::new(substitute_expr(then_, subst)),
-            Box::new(substitute_expr(else_, subst)),
-        ),
+        Expr::If(cond, branches) => {
+            let new_cond = Box::new(substitute_bool_expr(cond, subst));
+            let new_branches = match branches {
+                SymIfBranches::ThenTaken { then_, else_ } => SymIfBranches::ThenTaken {
+                    then_: Box::new(substitute_expr(then_, subst)),
+                    else_: else_.clone(), // Ast branch - no substitution needed
+                },
+                SymIfBranches::ElseTaken { then_, else_ } => SymIfBranches::ElseTaken {
+                    then_: then_.clone(), // Ast branch - no substitution needed
+                    else_: Box::new(substitute_expr(else_, subst)),
+                },
+            };
+            Expr::If(new_cond, new_branches)
+        }
     }
 }
 
@@ -545,14 +608,59 @@ pub fn negate_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{exec, ConcolicState};
+    use crate::state::exec;
+
+    /// Convert Ast expression to Symbolic using version 0 for all variables (test helper)
+    fn ast_to_symbolic(expr: &Expr<Ast>) -> Expr<Symbolic> {
+        match expr {
+            Expr::Lit(n) => Expr::Lit(*n),
+            Expr::Var(name) => Expr::Var(SsaVar::new(name, 0)),
+            Expr::Add(l, r) => Expr::Add(
+                Box::new(ast_to_symbolic(l)),
+                Box::new(ast_to_symbolic(r)),
+            ),
+            Expr::Sub(l, r) => Expr::Sub(
+                Box::new(ast_to_symbolic(l)),
+                Box::new(ast_to_symbolic(r)),
+            ),
+            Expr::If(cond, branches) => {
+                // For test purposes, convert both branches to Symbolic
+                // (representing a "fully evaluated" ite, which isn't realistic
+                // but works for testing the solver)
+                Expr::If(
+                    Box::new(ast_to_symbolic_bool(cond)),
+                    SymIfBranches::ThenTaken {
+                        then_: Box::new(ast_to_symbolic(&branches.then_)),
+                        else_: branches.else_.clone(),
+                    },
+                )
+            }
+        }
+    }
+
+    /// Convert Ast boolean expression to Symbolic using version 0 (test helper)
+    fn ast_to_symbolic_bool(expr: &BoolExpr<Ast>) -> BoolExpr<Symbolic> {
+        match expr {
+            BoolExpr::Lit(b) => BoolExpr::Lit(*b),
+            BoolExpr::Le(l, r) => BoolExpr::Le(
+                Box::new(ast_to_symbolic(l)),
+                Box::new(ast_to_symbolic(r)),
+            ),
+            BoolExpr::Ge(l, r) => BoolExpr::Ge(
+                Box::new(ast_to_symbolic(l)),
+                Box::new(ast_to_symbolic(r)),
+            ),
+            BoolExpr::Eq(l, r) => BoolExpr::Eq(
+                Box::new(ast_to_symbolic(l)),
+                Box::new(ast_to_symbolic(r)),
+            ),
+        }
+    }
 
     /// Helper to create a symbolic boolean expression from a string
     fn parse_symbolic_bool(s: &str) -> BoolExpr<Symbolic> {
         let ast_expr = crate::parse_bool_expr(s).unwrap();
-        // Create a ConcolicState just for SSA conversion
-        let state = ConcolicState::new(HashMap::new());
-        state.to_ssa_bool_expr(&ast_expr)
+        ast_to_symbolic_bool(&ast_expr)
     }
 
     #[test]

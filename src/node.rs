@@ -6,8 +6,10 @@ use std::ops::{Add, Sub};
 pub type Env = HashMap<String, i64>;
 
 /// Marker trait for expression stages
-pub trait Stage {
+pub trait Stage: Sized {
     type Var: Clone + PartialEq + fmt::Debug + fmt::Display;
+    /// Type for If expression branches (allows mixing stages in Symbolic)
+    type IfBranches: Clone + PartialEq + fmt::Debug + fmt::Display;
 }
 
 /// AST stage: parsed expressions before evaluation
@@ -16,6 +18,7 @@ pub struct Ast;
 
 impl Stage for Ast {
     type Var = String;
+    type IfBranches = AstIfBranches;
 }
 
 /// Symbolic stage: expressions with SSA-converted variables
@@ -24,6 +27,44 @@ pub struct Symbolic;
 
 impl Stage for Symbolic {
     type Var = SsaVar;
+    type IfBranches = SymIfBranches;
+}
+
+/// If branches for AST stage (both branches are Ast)
+#[derive(Debug, Clone, PartialEq)]
+pub struct AstIfBranches {
+    pub then_: Box<Expr<Ast>>,
+    pub else_: Box<Expr<Ast>>,
+}
+
+/// If branches for Symbolic stage (one evaluated, one not)
+#[derive(Debug, Clone, PartialEq)]
+pub enum SymIfBranches {
+    /// Then branch was taken (evaluated to Symbolic)
+    ThenTaken {
+        then_: Box<Expr<Symbolic>>,
+        else_: Box<Expr<Ast>>,
+    },
+    /// Else branch was taken (evaluated to Symbolic)
+    ElseTaken {
+        then_: Box<Expr<Ast>>,
+        else_: Box<Expr<Symbolic>>,
+    },
+}
+
+impl fmt::Display for AstIfBranches {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}, {}", self.then_, self.else_)
+    }
+}
+
+impl fmt::Display for SymIfBranches {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SymIfBranches::ThenTaken { then_, else_ } => write!(f, "{}, {}", then_, else_),
+            SymIfBranches::ElseTaken { then_, else_ } => write!(f, "{}, {}", then_, else_),
+        }
+    }
 }
 
 /// SSA-style variable identifier: (name, version)
@@ -60,7 +101,7 @@ pub enum Expr<S: Stage = Ast> {
     /// Subtraction
     Sub(Box<Expr<S>>, Box<Expr<S>>),
     /// Conditional expression
-    If(Box<BoolExpr<S>>, Box<Expr<S>>, Box<Expr<S>>),
+    If(Box<BoolExpr<S>>, S::IfBranches),
 }
 
 /// Boolean expressions
@@ -135,7 +176,13 @@ impl Expr<Ast> {
     }
 
     pub fn if_(cond: BoolExpr<Ast>, then_: Expr<Ast>, else_: Expr<Ast>) -> Self {
-        Expr::If(Box::new(cond), Box::new(then_), Box::new(else_))
+        Expr::If(
+            Box::new(cond),
+            AstIfBranches {
+                then_: Box::new(then_),
+                else_: Box::new(else_),
+            },
+        )
     }
 
     pub fn le(self, rhs: Expr<Ast>) -> BoolExpr<Ast> {
@@ -157,11 +204,11 @@ impl Expr<Ast> {
             Expr::Var(name) => env[name],
             Expr::Add(l, r) => l.eval(env) + r.eval(env),
             Expr::Sub(l, r) => l.eval(env) - r.eval(env),
-            Expr::If(cond, then_, else_) => {
+            Expr::If(cond, branches) => {
                 if cond.eval(env) {
-                    then_.eval(env)
+                    branches.then_.eval(env)
                 } else {
-                    else_.eval(env)
+                    branches.else_.eval(env)
                 }
             }
         }
@@ -207,8 +254,8 @@ impl<S: Stage> fmt::Display for Expr<S> {
             Expr::Var(name) => write!(f, "{}", name),
             Expr::Add(l, r) => write!(f, "{} + {}", l, r),
             Expr::Sub(l, r) => write!(f, "{} - {}", l, r),
-            Expr::If(cond, then_, else_) => {
-                write!(f, "ite({}, {}, {})", cond, then_, else_)
+            Expr::If(cond, branches) => {
+                write!(f, "ite({}, {})", cond, branches)
             }
         }
     }

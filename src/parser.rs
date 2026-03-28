@@ -17,7 +17,7 @@
 
 use chumsky::prelude::*;
 
-use crate::{BoolExpr, Expr, Stmt, Stmts};
+use crate::{AstIfBranches, BoolExpr, Expr, Stmt, Stmts};
 
 #[derive(Clone, Copy)]
 enum BoolOp {
@@ -135,7 +135,13 @@ fn expr_parser<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>
             .then_ignore(text::keyword("else").padded())
             .then(expr)
             .map(|((cond, then_), else_)| {
-                Expr::If(Box::new(cond), Box::new(then_), Box::new(else_))
+                Expr::If(
+                    Box::new(cond),
+                    AstIfBranches {
+                        then_: Box::new(then_),
+                        else_: Box::new(else_),
+                    },
+                )
             });
 
         if_expr.or(arith)
@@ -306,8 +312,10 @@ mod tests {
                     Box::new(Expr::Var("x".to_string())),
                     Box::new(Expr::Lit(5))
                 )),
-                Box::new(Expr::Lit(1)),
-                Box::new(Expr::Lit(0))
+                AstIfBranches {
+                    then_: Box::new(Expr::Lit(1)),
+                    else_: Box::new(Expr::Lit(0)),
+                },
             )
         );
     }
@@ -322,15 +330,19 @@ mod tests {
                     Box::new(Expr::Var("x".to_string())),
                     Box::new(Expr::Lit(5))
                 )),
-                Box::new(Expr::If(
-                    Box::new(BoolExpr::Ge(
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Lit(0))
+                AstIfBranches {
+                    then_: Box::new(Expr::If(
+                        Box::new(BoolExpr::Ge(
+                            Box::new(Expr::Var("x".to_string())),
+                            Box::new(Expr::Lit(0))
+                        )),
+                        AstIfBranches {
+                            then_: Box::new(Expr::Var("x".to_string())),
+                            else_: Box::new(Expr::Lit(0)),
+                        },
                     )),
-                    Box::new(Expr::Var("x".to_string())),
-                    Box::new(Expr::Lit(0))
-                )),
-                Box::new(Expr::Lit(10))
+                    else_: Box::new(Expr::Lit(10)),
+                },
             )
         );
     }
@@ -348,11 +360,13 @@ mod tests {
                     )),
                     Box::new(Expr::Lit(10))
                 )),
-                Box::new(Expr::Sub(
-                    Box::new(Expr::Var("x".to_string())),
-                    Box::new(Expr::Lit(1))
-                )),
-                Box::new(Expr::Lit(0))
+                AstIfBranches {
+                    then_: Box::new(Expr::Sub(
+                        Box::new(Expr::Var("x".to_string())),
+                        Box::new(Expr::Lit(1))
+                    )),
+                    else_: Box::new(Expr::Lit(0)),
+                },
             )
         );
     }
@@ -369,8 +383,10 @@ mod tests {
                         Box::new(Expr::Var("x".to_string())),
                         Box::new(Expr::Lit(5))
                     )),
-                    Box::new(Expr::Var("x".to_string())),
-                    Box::new(Expr::Lit(10))
+                    AstIfBranches {
+                        then_: Box::new(Expr::Var("x".to_string())),
+                        else_: Box::new(Expr::Lit(10)),
+                    },
                 )),
                 Box::new(Expr::Lit(7))
             )
@@ -437,11 +453,13 @@ mod tests {
                         Box::new(Expr::Var("x".to_string())),
                         Box::new(Expr::Lit(1))
                     )),
-                    Box::new(Expr::Var("x".to_string())),
-                    Box::new(Expr::Add(
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Lit(1))
-                    ))
+                    AstIfBranches {
+                        then_: Box::new(Expr::Var("x".to_string())),
+                        else_: Box::new(Expr::Add(
+                            Box::new(Expr::Var("x".to_string())),
+                            Box::new(Expr::Lit(1))
+                        )),
+                    },
                 )
             }])
         );
