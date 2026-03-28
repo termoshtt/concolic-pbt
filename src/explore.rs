@@ -221,7 +221,7 @@ mod tests {
 
     /// Helper to create Stmts from a single assert
     fn assert_stmts(expr: &str) -> Stmts {
-        Stmts(vec![Stmt::assert(parse_bool_expr(expr).unwrap())])
+        Stmt::assert(parse_bool_expr(expr).unwrap()).into()
     }
 
     #[test]

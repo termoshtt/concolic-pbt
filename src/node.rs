@@ -49,6 +49,18 @@ pub enum Stmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stmts(pub Vec<Stmt>);
 
+impl From<Stmt> for Stmts {
+    fn from(stmt: Stmt) -> Self {
+        Stmts(vec![stmt])
+    }
+}
+
+impl<T: Into<Stmt>> FromIterator<T> for Stmts {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Stmts(iter.into_iter().map(Into::into).collect())
+    }
+}
+
 impl Stmt {
     /// Create an assertion statement
     pub fn assert(expr: BoolExpr) -> Self {

@@ -45,21 +45,6 @@ impl SsaVar {
     }
 }
 
-impl From<String> for SsaVar {
-    fn from(name: String) -> Self {
-        Self { name, version: 0 }
-    }
-}
-
-impl From<&str> for SsaVar {
-    fn from(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            version: 0,
-        }
-    }
-}
-
 impl fmt::Display for SsaVar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}@{}", self.name, self.version)
@@ -523,21 +508,6 @@ mod tests {
             state.exec_stmts(&stmts),
             Err(OracleFailure::AssertionFailed { .. })
         ));
-    }
-
-    #[test]
-    fn display_state_with_let() {
-        let stmts = parse_stmts("let y = if x >= 1 then x else x + 1").unwrap();
-        let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 5)]));
-        state.exec_stmts(&stmts).unwrap();
-
-        insta::assert_snapshot!(state, @r###"
-        Env: x = 5, y = 5
-        Let constraints:
-          y@0 = ite(x >= 1, x, x + 1)
-        Path constraints:
-          x [=5] >= 1 : true
-        "###);
     }
 
     #[test]

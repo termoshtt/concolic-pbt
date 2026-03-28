@@ -85,7 +85,7 @@ use std::collections::HashMap;
 // This should hold for most inputs, but fails when x > 11
 // (because x - 1 > 10 when x > 11)
 let property = parse_bool_expr("(if x <= 5 then x + 1 else x - 1) <= 10").unwrap();
-let stmts = Stmts(vec![Stmt::assert(property)]);
+let stmts: Stmts = Stmt::assert(property).into();
 
 let rng = rand::rngs::StdRng::seed_from_u64(42);
 let solver = Solver::new(rng, 100);
