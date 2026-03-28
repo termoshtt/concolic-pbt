@@ -5,44 +5,87 @@ use std::ops::{Add, Sub};
 /// Environment mapping variable names to concrete values
 pub type Env = HashMap<String, i64>;
 
+/// Marker trait for expression stages
+pub trait Stage {
+    type Var: Clone + PartialEq + fmt::Debug + fmt::Display;
+}
+
+/// AST stage: parsed expressions before evaluation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ast;
+
+impl Stage for Ast {
+    type Var = String;
+}
+
+/// Symbolic stage: expressions with SSA-converted variables
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Symbolic;
+
+impl Stage for Symbolic {
+    type Var = SsaVar;
+}
+
+/// SSA-style variable identifier: (name, version)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SsaVar {
+    pub name: String,
+    pub version: usize,
+}
+
+impl SsaVar {
+    pub fn new(name: impl Into<String>, version: usize) -> Self {
+        Self {
+            name: name.into(),
+            version,
+        }
+    }
+}
+
+impl fmt::Display for SsaVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.name, self.version)
+    }
+}
+
 /// Abstract Syntax Tree for integer expressions
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum Expr<S: Stage = Ast> {
     /// Integer literal
     Lit(i64),
-    /// Variable reference by name
-    Var(String),
+    /// Variable reference
+    Var(S::Var),
     /// Addition
-    Add(Box<Expr>, Box<Expr>),
+    Add(Box<Expr<S>>, Box<Expr<S>>),
     /// Subtraction
-    Sub(Box<Expr>, Box<Expr>),
+    Sub(Box<Expr<S>>, Box<Expr<S>>),
     /// Conditional expression
-    If(Box<BoolExpr>, Box<Expr>, Box<Expr>),
+    If(Box<BoolExpr<S>>, Box<Expr<S>>, Box<Expr<S>>),
 }
 
 /// Boolean expressions
 #[derive(Debug, Clone, PartialEq)]
-pub enum BoolExpr {
+pub enum BoolExpr<S: Stage = Ast> {
     /// Boolean literal
     Lit(bool),
     /// Less than or equal (<=)
-    Le(Box<Expr>, Box<Expr>),
+    Le(Box<Expr<S>>, Box<Expr<S>>),
     /// Greater than or equal (>=)
-    Ge(Box<Expr>, Box<Expr>),
+    Ge(Box<Expr<S>>, Box<Expr<S>>),
     /// Equal (==)
-    Eq(Box<Expr>, Box<Expr>),
+    Eq(Box<Expr<S>>, Box<Expr<S>>),
 }
 
-/// Single statement
+/// Single statement (always in AST stage)
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     /// Assertion: assert(bool_expr)
-    Assert { expr: BoolExpr },
+    Assert { expr: BoolExpr<Ast> },
     /// Variable binding: let name = expr
     ///
     /// The binding introduces a constraint `name == expr` for the solver,
     /// without expanding `name` in subsequent expressions.
-    Let { name: String, expr: Expr },
+    Let { name: String, expr: Expr<Ast> },
 }
 
 /// Sequence of statements
@@ -63,12 +106,12 @@ impl<T: Into<Stmt>> FromIterator<T> for Stmts {
 
 impl Stmt {
     /// Create an assertion statement
-    pub fn assert(expr: BoolExpr) -> Self {
+    pub fn assert(expr: BoolExpr<Ast>) -> Self {
         Stmt::Assert { expr }
     }
 
     /// Create a let binding statement
-    pub fn let_(name: impl Into<String>, expr: Expr) -> Self {
+    pub fn let_(name: impl Into<String>, expr: Expr<Ast>) -> Self {
         Stmt::Let {
             name: name.into(),
             expr,
@@ -76,7 +119,7 @@ impl Stmt {
     }
 }
 
-impl Expr {
+impl Expr<Ast> {
     pub fn lit(n: i64) -> Self {
         Expr::Lit(n)
     }
@@ -91,19 +134,19 @@ impl Expr {
         Expr::Var(name)
     }
 
-    pub fn if_(cond: BoolExpr, then_: Expr, else_: Expr) -> Self {
+    pub fn if_(cond: BoolExpr<Ast>, then_: Expr<Ast>, else_: Expr<Ast>) -> Self {
         Expr::If(Box::new(cond), Box::new(then_), Box::new(else_))
     }
 
-    pub fn le(self, rhs: Expr) -> BoolExpr {
+    pub fn le(self, rhs: Expr<Ast>) -> BoolExpr<Ast> {
         BoolExpr::Le(Box::new(self), Box::new(rhs))
     }
 
-    pub fn ge(self, rhs: Expr) -> BoolExpr {
+    pub fn ge(self, rhs: Expr<Ast>) -> BoolExpr<Ast> {
         BoolExpr::Ge(Box::new(self), Box::new(rhs))
     }
 
-    pub fn eq_(self, rhs: Expr) -> BoolExpr {
+    pub fn eq_(self, rhs: Expr<Ast>) -> BoolExpr<Ast> {
         BoolExpr::Eq(Box::new(self), Box::new(rhs))
     }
 
@@ -125,7 +168,7 @@ impl Expr {
     }
 }
 
-impl BoolExpr {
+impl BoolExpr<Ast> {
     pub fn lit(b: bool) -> Self {
         BoolExpr::Lit(b)
     }
@@ -141,23 +184,23 @@ impl BoolExpr {
     }
 }
 
-impl Add for Expr {
-    type Output = Expr;
+impl Add for Expr<Ast> {
+    type Output = Expr<Ast>;
 
-    fn add(self, rhs: Expr) -> Self::Output {
+    fn add(self, rhs: Expr<Ast>) -> Self::Output {
         Expr::Add(Box::new(self), Box::new(rhs))
     }
 }
 
-impl Sub for Expr {
-    type Output = Expr;
+impl Sub for Expr<Ast> {
+    type Output = Expr<Ast>;
 
-    fn sub(self, rhs: Expr) -> Self::Output {
+    fn sub(self, rhs: Expr<Ast>) -> Self::Output {
         Expr::Sub(Box::new(self), Box::new(rhs))
     }
 }
 
-impl fmt::Display for Expr {
+impl<S: Stage> fmt::Display for Expr<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Expr::Lit(n) => write!(f, "{}", n),
@@ -171,7 +214,7 @@ impl fmt::Display for Expr {
     }
 }
 
-impl fmt::Display for BoolExpr {
+impl<S: Stage> fmt::Display for BoolExpr<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BoolExpr::Lit(b) => write!(f, "{}", b),

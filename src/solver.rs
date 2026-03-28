@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::state::ExecutionTrace;
-use crate::{BoolExpr, Env, Expr, SsaVar};
+use crate::{BoolExpr, Env, Expr, SsaVar, Symbolic};
 
 /// Error during constraint solving
 #[derive(Debug, Clone, PartialEq)]
@@ -86,7 +86,7 @@ impl Bound {
 pub type Bounds = HashMap<String, Bound>;
 
 /// Check if expression contains ite
-fn contains_ite(expr: &Expr) -> bool {
+fn contains_ite(expr: &Expr<Symbolic>) -> bool {
     match expr {
         Expr::Lit(_) | Expr::Var(_) => false,
         Expr::Add(l, r) | Expr::Sub(l, r) => contains_ite(l) || contains_ite(r),
@@ -95,7 +95,7 @@ fn contains_ite(expr: &Expr) -> bool {
 }
 
 /// Check if boolean expression contains ite
-fn bool_contains_ite(expr: &BoolExpr) -> bool {
+fn bool_contains_ite(expr: &BoolExpr<Symbolic>) -> bool {
     match expr {
         BoolExpr::Lit(_) => false,
         BoolExpr::Le(l, r) | BoolExpr::Ge(l, r) | BoolExpr::Eq(l, r) => {
@@ -105,16 +105,17 @@ fn bool_contains_ite(expr: &BoolExpr) -> bool {
 }
 
 /// Try to extract a single variable from expression (if it's just a variable or var + const)
-fn as_single_var(expr: &Expr) -> Option<(&str, i64)> {
+/// Returns (variable_name, offset) where the expression represents name + offset
+fn as_single_var(expr: &Expr<Symbolic>) -> Option<(&str, i64)> {
     match expr {
-        Expr::Var(name) => Some((name, 0)),
+        Expr::Var(ssa_var) => Some((&ssa_var.name, 0)),
         Expr::Add(l, r) => match (l.as_ref(), r.as_ref()) {
-            (Expr::Var(name), Expr::Lit(n)) => Some((name, *n)),
-            (Expr::Lit(n), Expr::Var(name)) => Some((name, *n)),
+            (Expr::Var(ssa_var), Expr::Lit(n)) => Some((&ssa_var.name, *n)),
+            (Expr::Lit(n), Expr::Var(ssa_var)) => Some((&ssa_var.name, *n)),
             _ => None,
         },
         Expr::Sub(l, r) => match (l.as_ref(), r.as_ref()) {
-            (Expr::Var(name), Expr::Lit(n)) => Some((name, -*n)),
+            (Expr::Var(ssa_var), Expr::Lit(n)) => Some((&ssa_var.name, -*n)),
             _ => None,
         },
         _ => None,
@@ -126,8 +127,8 @@ fn as_single_var(expr: &Expr) -> Option<(&str, i64)> {
 /// Returns (bounds, remaining_constraints) where remaining_constraints
 /// are those that couldn't be converted to simple bounds.
 pub fn extract_bounds(
-    constraints: &[(BoolExpr, bool)],
-) -> Result<(Bounds, Vec<(BoolExpr, bool)>), SolverError> {
+    constraints: &[(BoolExpr<Symbolic>, bool)],
+) -> Result<(Bounds, Vec<(BoolExpr<Symbolic>, bool)>), SolverError> {
     let mut bounds = Bounds::new();
     let mut remaining = Vec::new();
 
@@ -273,7 +274,7 @@ impl<R: rand::Rng> Solver<R> {
     }
 
     /// Build substitution map from let constraints
-    fn build_subst(let_constraints: &[(SsaVar, Expr)]) -> Subst {
+    fn build_subst(let_constraints: &[(SsaVar, Expr<Symbolic>)]) -> Subst {
         let_constraints
             .iter()
             .map(|(ssa_var, expr)| (ssa_var.to_string(), expr.clone()))
@@ -296,7 +297,7 @@ impl<R: rand::Rng> Solver<R> {
     pub fn find_counterexample(
         &mut self,
         trace: &ExecutionTrace,
-        ssa_assertion: &BoolExpr,
+        ssa_assertion: &BoolExpr<Symbolic>,
     ) -> Result<Env, SolverError> {
         let mut constraints = trace.path_constraints.clone();
         // Negate the assertion
@@ -313,7 +314,7 @@ impl<R: rand::Rng> Solver<R> {
     /// and the substitution map (to exclude let-defined variables from sampling).
     fn solve(
         &mut self,
-        constraints: &[(BoolExpr, bool)],
+        constraints: &[(BoolExpr<Symbolic>, bool)],
         subst: &Subst,
     ) -> Result<Env, SolverError> {
         let (bounds, remaining) = extract_bounds(constraints)?;
@@ -333,7 +334,10 @@ impl<R: rand::Rng> Solver<R> {
 
     /// Solve constraints without let expansion (for testing)
     #[cfg(test)]
-    fn solve_constraints(&mut self, constraints: &[(BoolExpr, bool)]) -> Result<Env, SolverError> {
+    fn solve_constraints(
+        &mut self,
+        constraints: &[(BoolExpr<Symbolic>, bool)],
+    ) -> Result<Env, SolverError> {
         self.solve(constraints, &Subst::new())
     }
 
@@ -341,7 +345,7 @@ impl<R: rand::Rng> Solver<R> {
     fn sample(
         &mut self,
         bounds: &Bounds,
-        remaining: &[(BoolExpr, bool)],
+        remaining: &[(BoolExpr<Symbolic>, bool)],
         variables: &[String],
     ) -> Result<Env, SolverError> {
         for _ in 0..self.max_attempts {
@@ -368,9 +372,9 @@ impl<R: rand::Rng> Solver<R> {
     }
 
     /// Check if env satisfies all remaining constraints
-    fn check_remaining(remaining: &[(BoolExpr, bool)], env: &Env) -> bool {
+    fn check_remaining(remaining: &[(BoolExpr<Symbolic>, bool)], env: &Env) -> bool {
         for (expr, expected) in remaining {
-            if expr.eval(env) != *expected {
+            if eval_symbolic_bool(expr, env) != *expected {
                 return false;
             }
         }
@@ -378,13 +382,40 @@ impl<R: rand::Rng> Solver<R> {
     }
 }
 
+/// Evaluate a symbolic expression with the given environment
+fn eval_symbolic(expr: &Expr<Symbolic>, env: &Env) -> i64 {
+    match expr {
+        Expr::Lit(n) => *n,
+        Expr::Var(ssa_var) => env[&ssa_var.name],
+        Expr::Add(l, r) => eval_symbolic(l, env) + eval_symbolic(r, env),
+        Expr::Sub(l, r) => eval_symbolic(l, env) - eval_symbolic(r, env),
+        Expr::If(cond, then_, else_) => {
+            if eval_symbolic_bool(cond, env) {
+                eval_symbolic(then_, env)
+            } else {
+                eval_symbolic(else_, env)
+            }
+        }
+    }
+}
+
+/// Evaluate a symbolic boolean expression with the given environment
+fn eval_symbolic_bool(expr: &BoolExpr<Symbolic>, env: &Env) -> bool {
+    match expr {
+        BoolExpr::Lit(b) => *b,
+        BoolExpr::Le(l, r) => eval_symbolic(l, env) <= eval_symbolic(r, env),
+        BoolExpr::Ge(l, r) => eval_symbolic(l, env) >= eval_symbolic(r, env),
+        BoolExpr::Eq(l, r) => eval_symbolic(l, env) == eval_symbolic(r, env),
+    }
+}
+
 /// Collect variable names from expression
-fn collect_variables(expr: &Expr, vars: &mut Vec<String>) {
+fn collect_variables(expr: &Expr<Symbolic>, vars: &mut Vec<String>) {
     match expr {
         Expr::Lit(_) => {}
-        Expr::Var(name) => {
-            if !vars.contains(name) {
-                vars.push(name.clone());
+        Expr::Var(ssa_var) => {
+            if !vars.contains(&ssa_var.name) {
+                vars.push(ssa_var.name.clone());
             }
         }
         Expr::Add(l, r) | Expr::Sub(l, r) => {
@@ -400,7 +431,7 @@ fn collect_variables(expr: &Expr, vars: &mut Vec<String>) {
 }
 
 /// Collect variable names from boolean expression
-fn collect_variables_bool(expr: &BoolExpr, vars: &mut Vec<String>) {
+fn collect_variables_bool(expr: &BoolExpr<Symbolic>, vars: &mut Vec<String>) {
     match expr {
         BoolExpr::Lit(_) => {}
         BoolExpr::Le(l, r) | BoolExpr::Ge(l, r) | BoolExpr::Eq(l, r) => {
@@ -411,17 +442,18 @@ fn collect_variables_bool(expr: &BoolExpr, vars: &mut Vec<String>) {
 }
 
 /// Substitution map: variable name -> expression
-pub type Subst = std::collections::HashMap<String, Expr>;
+pub type Subst = std::collections::HashMap<String, Expr<Symbolic>>;
 
 /// Substitute variables in expression according to substitution map
-fn substitute_expr(expr: &Expr, subst: &Subst) -> Expr {
+fn substitute_expr(expr: &Expr<Symbolic>, subst: &Subst) -> Expr<Symbolic> {
     match expr {
         Expr::Lit(n) => Expr::Lit(*n),
-        Expr::Var(name) => {
-            if let Some(replacement) = subst.get(name) {
+        Expr::Var(ssa_var) => {
+            let key = ssa_var.to_string();
+            if let Some(replacement) = subst.get(&key) {
                 substitute_expr(replacement, subst)
             } else {
-                Expr::Var(name.clone())
+                Expr::Var(ssa_var.clone())
             }
         }
         Expr::Add(l, r) => Expr::Add(
@@ -441,7 +473,7 @@ fn substitute_expr(expr: &Expr, subst: &Subst) -> Expr {
 }
 
 /// Substitute variables in boolean expression according to substitution map
-fn substitute_bool_expr(expr: &BoolExpr, subst: &Subst) -> BoolExpr {
+fn substitute_bool_expr(expr: &BoolExpr<Symbolic>, subst: &Subst) -> BoolExpr<Symbolic> {
     match expr {
         BoolExpr::Lit(b) => BoolExpr::Lit(*b),
         BoolExpr::Le(l, r) => BoolExpr::Le(
@@ -460,7 +492,10 @@ fn substitute_bool_expr(expr: &BoolExpr, subst: &Subst) -> BoolExpr {
 }
 
 /// Apply substitution to constraints
-fn apply_substitution(constraints: &[(BoolExpr, bool)], subst: &Subst) -> Vec<(BoolExpr, bool)> {
+fn apply_substitution(
+    constraints: &[(BoolExpr<Symbolic>, bool)],
+    subst: &Subst,
+) -> Vec<(BoolExpr<Symbolic>, bool)> {
     constraints
         .iter()
         .map(|(expr, taken)| (substitute_bool_expr(expr, subst), *taken))
@@ -495,7 +530,10 @@ fn apply_substitution(constraints: &[(BoolExpr, bool)], subst: &Subst) -> Vec<(B
 /// When cond2 is T (negated), we take the then branch and cond3 doesn't exist.
 /// By only requiring `[T, T, T]`, we let the solver find any input satisfying
 /// these constraints, and the actual execution determines what happens next.
-pub fn negate_at(constraints: &[(BoolExpr, bool)], i: usize) -> Vec<(BoolExpr, bool)> {
+pub fn negate_at(
+    constraints: &[(BoolExpr<Symbolic>, bool)],
+    i: usize,
+) -> Vec<(BoolExpr<Symbolic>, bool)> {
     let mut result = constraints[0..i].to_vec();
     if i < constraints.len() {
         let (expr, taken) = &constraints[i];
@@ -507,7 +545,15 @@ pub fn negate_at(constraints: &[(BoolExpr, bool)], i: usize) -> Vec<(BoolExpr, b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse_bool_expr;
+    use crate::state::{exec, ConcolicState};
+
+    /// Helper to create a symbolic boolean expression from a string
+    fn parse_symbolic_bool(s: &str) -> BoolExpr<Symbolic> {
+        let ast_expr = crate::parse_bool_expr(s).unwrap();
+        // Create a ConcolicState just for SSA conversion
+        let state = ConcolicState::new(HashMap::new());
+        state.to_ssa_bool_expr(&ast_expr)
+    }
 
     #[test]
     fn bound_basic() {
@@ -529,7 +575,7 @@ mod tests {
 
     #[test]
     fn extract_simple_le() {
-        let constraints = vec![(parse_bool_expr("x <= 5").unwrap(), true)];
+        let constraints = vec![(parse_symbolic_bool("x <= 5"), true)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(remaining.is_empty());
@@ -539,7 +585,7 @@ mod tests {
 
     #[test]
     fn extract_le_negated() {
-        let constraints = vec![(parse_bool_expr("x <= 5").unwrap(), false)];
+        let constraints = vec![(parse_symbolic_bool("x <= 5"), false)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(remaining.is_empty());
@@ -551,7 +597,7 @@ mod tests {
     #[test]
     fn extract_with_offset() {
         // x + 1 <= 5 → x <= 4
-        let constraints = vec![(parse_bool_expr("x + 1 <= 5").unwrap(), true)];
+        let constraints = vec![(parse_symbolic_bool("x + 1 <= 5"), true)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(remaining.is_empty());
@@ -560,7 +606,7 @@ mod tests {
 
     #[test]
     fn extract_eq() {
-        let constraints = vec![(parse_bool_expr("x == 5").unwrap(), true)];
+        let constraints = vec![(parse_symbolic_bool("x == 5"), true)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(remaining.is_empty());
@@ -570,7 +616,7 @@ mod tests {
 
     #[test]
     fn extract_neq() {
-        let constraints = vec![(parse_bool_expr("x == 5").unwrap(), false)];
+        let constraints = vec![(parse_symbolic_bool("x == 5"), false)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(remaining.is_empty());
@@ -579,7 +625,7 @@ mod tests {
 
     #[test]
     fn extract_two_var_goes_to_remaining() {
-        let constraints = vec![(parse_bool_expr("x <= y").unwrap(), true)];
+        let constraints = vec![(parse_symbolic_bool("x <= y"), true)];
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
 
         assert!(bounds.is_empty());
@@ -588,10 +634,7 @@ mod tests {
 
     #[test]
     fn ite_goes_to_remaining() {
-        let constraints = vec![(
-            parse_bool_expr("(if x <= 5 then x else 0) <= 3").unwrap(),
-            true,
-        )];
+        let constraints = vec![(parse_symbolic_bool("(if x <= 5 then x else 0) <= 3"), true)];
 
         let (bounds, remaining) = extract_bounds(&constraints).unwrap();
         assert!(bounds.is_empty());
@@ -601,7 +644,7 @@ mod tests {
     #[test]
     fn solver_simple() {
         // x <= 5 (true) → find x in [-1000, 5]
-        let constraints = vec![(parse_bool_expr("x <= 5").unwrap(), true)];
+        let constraints = vec![(parse_symbolic_bool("x <= 5"), true)];
 
         let mut solver = Solver::new(rand::rng(), 100);
         let env = solver.solve_constraints(&constraints).unwrap();
@@ -613,8 +656,8 @@ mod tests {
         // x <= 10 (true), x <= y (true)
         // Need to find x, y such that x <= 10 and x <= y
         let constraints = vec![
-            (parse_bool_expr("x <= 10").unwrap(), true),
-            (parse_bool_expr("x <= y").unwrap(), true),
+            (parse_symbolic_bool("x <= 10"), true),
+            (parse_symbolic_bool("x <= y"), true),
         ];
 
         let mut solver = Solver::new(rand::rng(), 1000);
@@ -626,9 +669,9 @@ mod tests {
     #[test]
     fn negate_at_test() {
         let constraints = vec![
-            (parse_bool_expr("x <= 5").unwrap(), true),
-            (parse_bool_expr("x <= 10").unwrap(), true),
-            (parse_bool_expr("x <= 15").unwrap(), false),
+            (parse_symbolic_bool("x <= 5"), true),
+            (parse_symbolic_bool("x <= 10"), true),
+            (parse_symbolic_bool("x <= 15"), false),
         ];
 
         // Negate at index 1
@@ -640,7 +683,6 @@ mod tests {
 
     #[test]
     fn find_alternative_test() {
-        use crate::state::exec;
         use std::collections::HashMap;
 
         // Simulate: if x <= 5 then ... else ...
@@ -666,10 +708,7 @@ mod tests {
         // (if x <= 5 then x else 10) <= 7 : true
         // This means either (x <= 5 and x <= 7) or (x > 5 and 10 <= 7)
         // The second case is impossible (10 > 7), so x <= 5
-        let constraints = vec![(
-            parse_bool_expr("(if x <= 5 then x else 10) <= 7").unwrap(),
-            true,
-        )];
+        let constraints = vec![(parse_symbolic_bool("(if x <= 5 then x else 10) <= 7"), true)];
 
         let mut solver = Solver::new(rand::rng(), 1000);
         // Should find x such that (if x <= 5 then x else 10) <= 7

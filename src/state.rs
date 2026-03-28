@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::{BoolExpr, Env, Expr, Stmt, Stmts};
+use crate::{Ast, BoolExpr, Env, Expr, SsaVar, Stmt, Stmts, Symbolic};
 
 /// Oracle failure types
 ///
@@ -17,7 +17,7 @@ pub enum OracleFailure {
     /// When `Stmt` is added to the language, this will correspond to explicit assert statements.
     AssertionFailed {
         /// The boolean expression that was asserted and evaluated to false
-        expr: BoolExpr,
+        expr: BoolExpr<Ast>,
     },
     /// Undefined variable reference
     UndefinedVariable {
@@ -29,39 +29,17 @@ pub enum OracleFailure {
     // Inf { tensor: String },
 }
 
-/// SSA-style variable identifier: (name, version)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SsaVar {
-    pub name: String,
-    pub version: usize,
-}
-
-impl SsaVar {
-    pub fn new(name: impl Into<String>, version: usize) -> Self {
-        Self {
-            name: name.into(),
-            version,
-        }
-    }
-}
-
-impl fmt::Display for SsaVar {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.name, self.version)
-    }
-}
-
 /// Result of executing a sequence of statements (immutable)
 #[derive(Debug, Clone)]
 pub struct ExecutionTrace {
     /// Input environment
     pub env: Env,
     /// Collected path constraints (with the branch direction taken)
-    pub path_constraints: Vec<(BoolExpr, bool)>,
+    pub path_constraints: Vec<(BoolExpr<Symbolic>, bool)>,
     /// Let binding constraints in SSA form
-    pub let_constraints: Vec<(SsaVar, Expr)>,
+    pub let_constraints: Vec<(SsaVar, Expr<Symbolic>)>,
     /// Assertions that passed during execution (in SSA form)
-    pub passed_asserts: Vec<BoolExpr>,
+    pub passed_asserts: Vec<BoolExpr<Symbolic>>,
     /// Execution result (Ok if all assertions passed, Err if one failed)
     pub result: Result<(), OracleFailure>,
 }
@@ -88,7 +66,7 @@ pub(crate) struct ConcolicState {
     ///
     /// These are conditions from if-then-else branches encountered during execution.
     /// Oracle failures are not stored here; they are returned directly in ExploreResult.
-    pub path_constraints: Vec<(BoolExpr, bool)>,
+    pub path_constraints: Vec<(BoolExpr<Symbolic>, bool)>,
     /// Let binding constraints in SSA form: ((name, version), expr)
     ///
     /// When a `let name = expr` statement is executed, the expr is transformed
@@ -96,9 +74,9 @@ pub(crate) struct ConcolicState {
     /// For example: `let y = x + 1; let y = y + 1` becomes:
     /// - ((y, 0), x + 1)
     /// - ((y, 1), (y, 0) + 1)
-    pub let_constraints: Vec<(SsaVar, Expr)>,
+    pub let_constraints: Vec<(SsaVar, Expr<Symbolic>)>,
     /// Assertions that passed during execution (in SSA form)
-    pub passed_asserts: Vec<BoolExpr>,
+    pub passed_asserts: Vec<BoolExpr<Symbolic>>,
     /// Current version for each variable name
     versions: std::collections::HashMap<String, usize>,
 }
@@ -123,7 +101,7 @@ impl ConcolicState {
     }
 
     /// Convert expression to SSA form, replacing let-defined variables with their SSA names
-    pub fn to_ssa_expr(&self, expr: &Expr) -> Expr {
+    pub(crate) fn to_ssa_expr(&self, expr: &Expr<Ast>) -> Expr<Symbolic> {
         match expr {
             Expr::Lit(n) => Expr::Lit(*n),
             Expr::Var(name) => {
@@ -131,9 +109,10 @@ impl ConcolicState {
                 // Otherwise keep original name (input variable)
                 if let Some(&version) = self.versions.get(name) {
                     // Use version - 1 because versions points to the next version
-                    Expr::Var(SsaVar::new(name, version - 1).to_string())
+                    Expr::Var(SsaVar::new(name, version - 1))
                 } else {
-                    Expr::Var(name.clone())
+                    // Input variable: use version 0 implicitly (represented as name without version)
+                    Expr::Var(SsaVar::new(name, 0))
                 }
             }
             Expr::Add(l, r) => {
@@ -151,7 +130,7 @@ impl ConcolicState {
     }
 
     /// Convert boolean expression to SSA form
-    pub fn to_ssa_bool_expr(&self, expr: &BoolExpr) -> BoolExpr {
+    pub fn to_ssa_bool_expr(&self, expr: &BoolExpr<Ast>) -> BoolExpr<Symbolic> {
         match expr {
             BoolExpr::Lit(b) => BoolExpr::Lit(*b),
             BoolExpr::Le(l, r) => {
@@ -167,7 +146,7 @@ impl ConcolicState {
     }
 
     /// Evaluate an integer expression
-    pub fn eval(&mut self, expr: &Expr) -> Result<i64, OracleFailure> {
+    pub fn eval(&mut self, expr: &Expr<Ast>) -> Result<i64, OracleFailure> {
         match expr {
             Expr::Lit(n) => Ok(*n),
             Expr::Var(name) => self
@@ -192,7 +171,7 @@ impl ConcolicState {
     ///
     /// Used for branch conditions (if-then-else). The condition is recorded
     /// in path_constraints for path exploration.
-    pub fn eval_bool(&mut self, expr: &BoolExpr) -> Result<bool, OracleFailure> {
+    pub fn eval_bool(&mut self, expr: &BoolExpr<Ast>) -> Result<bool, OracleFailure> {
         let result = self.eval_assert(expr)?;
         if !matches!(expr, BoolExpr::Lit(_)) {
             // Record the SSA-converted condition so that path constraints
@@ -208,7 +187,7 @@ impl ConcolicState {
     /// The assertion expression itself is not recorded to path_constraints,
     /// but any internal branch conditions (from if-then-else in subexpressions)
     /// are still recorded via eval().
-    pub fn eval_assert(&mut self, expr: &BoolExpr) -> Result<bool, OracleFailure> {
+    pub fn eval_assert(&mut self, expr: &BoolExpr<Ast>) -> Result<bool, OracleFailure> {
         match expr {
             BoolExpr::Lit(b) => Ok(*b),
             BoolExpr::Le(l, r) => Ok(self.eval(l)? <= self.eval(r)?),
@@ -255,16 +234,31 @@ impl ConcolicState {
     }
 
     /// Format an expression with its concrete value: "x + 1 [=4]"
-    fn format_expr(&self, expr: &Expr) -> String {
-        let val = expr.eval(&self.env);
+    fn format_expr(&self, expr: &Expr<Symbolic>) -> String {
         match expr {
             Expr::Lit(n) => format!("{}", n),
-            _ => format!("{} [={}]", expr, val),
+            Expr::Var(ssa_var) => {
+                // Look up the concrete value using the base name
+                let val = self.env.get(&ssa_var.name).copied().unwrap_or(0);
+                format!("{} [={}]", ssa_var, val)
+            }
+            Expr::Add(l, r) | Expr::Sub(l, r) => {
+                // For binary ops, format sub-expressions recursively
+                let left = self.format_expr(l);
+                let right = self.format_expr(r);
+                let op = if matches!(expr, Expr::Add(_, _)) {
+                    "+"
+                } else {
+                    "-"
+                };
+                format!("{} {} {}", left, op, right)
+            }
+            Expr::If(_, _, _) => format!("{}", expr),
         }
     }
 
     /// Format a boolean expression with concrete values
-    fn format_bool_expr(&self, expr: &BoolExpr) -> String {
+    fn format_bool_expr(&self, expr: &BoolExpr<Symbolic>) -> String {
         match expr {
             BoolExpr::Lit(b) => format!("{}", b),
             BoolExpr::Le(l, r) => {
@@ -338,7 +332,7 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 5
         Path constraints:
-          x [=5] <= 10 : true
+          x@0 [=5] <= 10 : true
         "###);
     }
 
@@ -351,7 +345,7 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 15
         Path constraints:
-          x [=15] <= 10 : false
+          x@0 [=15] <= 10 : false
         "###);
     }
 
@@ -366,8 +360,8 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 3
         Path constraints:
-          x [=3] <= 5 : true
-          ite(x <= 5, x, 10) [=3] <= 7 : true
+          x@0 [=3] <= 5 : true
+          ite(x@0 <= 5, x@0, 10) <= 7 : true
         "###);
     }
 
@@ -382,8 +376,8 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 8
         Path constraints:
-          x [=8] <= 5 : false
-          ite(x <= 5, x, 10) [=10] <= 7 : false
+          x@0 [=8] <= 5 : false
+          ite(x@0 <= 5, x@0, 10) <= 7 : false
         "###);
     }
 
@@ -398,8 +392,8 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 2
         Path constraints:
-          x [=2] <= 5 : true
-          ite(x <= 5, x + 5, x - 5) [=7] <= 3 : false
+          x@0 [=2] <= 5 : true
+          ite(x@0 <= 5, x@0 + 5, x@0 - 5) <= 3 : false
         "###);
     }
 
@@ -418,9 +412,9 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 2, y = -1
         Path constraints:
-          x [=2] <= 5 : true
-          y [=-1] <= 0 : true
-          ite(x <= 5, ite(y <= 0, x + 5, x + 6), x - 5) [=7] <= 3 : false
+          x@0 [=2] <= 5 : true
+          y@0 [=-1] <= 0 : true
+          ite(x@0 <= 5, ite(y@0 <= 0, x@0 + 5, x@0 + 6), x@0 - 5) <= 3 : false
         "###);
     }
 
@@ -435,8 +429,8 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 3, y = 4
         Path constraints:
-          x + 1 [=4] <= 5 : true
-          y [=4] <= x + 2 [=5] : true
+          x@0 [=3] + 1 <= 5 : true
+          y@0 [=4] <= x@0 [=3] + 2 : true
         "###);
     }
 
@@ -500,7 +494,7 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 5, y = 6
         Let constraints:
-          y@0 = x + 1
+          y@0 = x@0 + 1
         Path constraints:
         "###);
     }
@@ -515,9 +509,9 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 5, y = 5
         Let constraints:
-          y@0 = ite(x >= 1, x, x + 1)
+          y@0 = ite(x@0 >= 1, x@0, x@0 + 1)
         Path constraints:
-          x [=5] >= 1 : true
+          x@0 [=5] >= 1 : true
         "###);
     }
 
@@ -530,7 +524,7 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 5, y = 6
         Let constraints:
-          y@0 = x + 1
+          y@0 = x@0 + 1
         Path constraints:
         "###);
     }
@@ -595,7 +589,7 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 5, y = 7
         Let constraints:
-          y@0 = x + 1
+          y@0 = x@0 + 1
           y@1 = y@0 + 1
         Path constraints:
         "###);
@@ -611,7 +605,7 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 7
         Let constraints:
-          x@0 = x + 1
+          x@0 = x@0 + 1
           x@1 = x@0 + 1
         Path constraints:
         "###);
