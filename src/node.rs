@@ -214,6 +214,27 @@ impl Expr<Ast> {
             }
         }
     }
+
+    /// Collect all variable names in this expression
+    pub fn collect_variables(&self, vars: &mut Vec<String>) {
+        match self {
+            Expr::Lit(_) => {}
+            Expr::Var(name) => {
+                if !vars.contains(name) {
+                    vars.push(name.clone());
+                }
+            }
+            Expr::Add(l, r) | Expr::Sub(l, r) => {
+                l.collect_variables(vars);
+                r.collect_variables(vars);
+            }
+            Expr::If(cond, branches) => {
+                cond.collect_variables(vars);
+                branches.then_.collect_variables(vars);
+                branches.else_.collect_variables(vars);
+            }
+        }
+    }
 }
 
 impl BoolExpr<Ast> {
@@ -228,6 +249,17 @@ impl BoolExpr<Ast> {
             BoolExpr::Le(l, r) => l.eval(env) <= r.eval(env),
             BoolExpr::Ge(l, r) => l.eval(env) >= r.eval(env),
             BoolExpr::Eq(l, r) => l.eval(env) == r.eval(env),
+        }
+    }
+
+    /// Collect all variable names in this expression
+    pub fn collect_variables(&self, vars: &mut Vec<String>) {
+        match self {
+            BoolExpr::Lit(_) => {}
+            BoolExpr::Le(l, r) | BoolExpr::Ge(l, r) | BoolExpr::Eq(l, r) => {
+                l.collect_variables(vars);
+                r.collect_variables(vars);
+            }
         }
     }
 }
@@ -245,6 +277,50 @@ impl Sub for Expr<Ast> {
 
     fn sub(self, rhs: Expr<Ast>) -> Self::Output {
         Expr::Sub(Box::new(self), Box::new(rhs))
+    }
+}
+
+impl Expr<Symbolic> {
+    /// Collect all variable names in this expression
+    pub fn collect_variables(&self, vars: &mut Vec<String>) {
+        match self {
+            Expr::Lit(_) => {}
+            Expr::Var(ssa_var) => {
+                if !vars.contains(&ssa_var.name) {
+                    vars.push(ssa_var.name.clone());
+                }
+            }
+            Expr::Add(l, r) | Expr::Sub(l, r) => {
+                l.collect_variables(vars);
+                r.collect_variables(vars);
+            }
+            Expr::If(cond, branches) => {
+                cond.collect_variables(vars);
+                match branches {
+                    SymIfBranches::ThenTaken { then_, else_ } => {
+                        then_.collect_variables(vars);
+                        else_.collect_variables(vars);
+                    }
+                    SymIfBranches::ElseTaken { then_, else_ } => {
+                        then_.collect_variables(vars);
+                        else_.collect_variables(vars);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl BoolExpr<Symbolic> {
+    /// Collect all variable names in this expression
+    pub fn collect_variables(&self, vars: &mut Vec<String>) {
+        match self {
+            BoolExpr::Lit(_) => {}
+            BoolExpr::Le(l, r) | BoolExpr::Ge(l, r) | BoolExpr::Eq(l, r) => {
+                l.collect_variables(vars);
+                r.collect_variables(vars);
+            }
+        }
     }
 }
 

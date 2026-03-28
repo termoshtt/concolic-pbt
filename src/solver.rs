@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::state::ExecutionTrace;
-use crate::{Ast, BoolExpr, Env, Expr, SsaVar, SymIfBranches, Symbolic};
+use crate::{BoolExpr, Env, Expr, SsaVar, SymIfBranches, Symbolic};
 
 /// Error during constraint solving
 #[derive(Debug, Clone, PartialEq)]
@@ -125,19 +125,38 @@ fn as_single_var(expr: &Expr<Symbolic>) -> Option<(&str, i64)> {
     }
 }
 
+/// Result of extracting bounds from constraints
+pub struct ExtractedBounds {
+    /// Bounds for each variable
+    pub bounds: Bounds,
+    /// Constraints that couldn't be converted to simple bounds
+    pub remaining: Constraints,
+    /// All variable names found in constraints
+    pub variables: Vec<String>,
+}
+
 /// Extract bounds from constraints
 ///
-/// Returns (bounds, remaining_constraints) where remaining_constraints
-/// are those that couldn't be converted to simple bounds.
+/// Returns bounds, remaining constraints, and all variable names found.
 pub fn extract_bounds(
     constraints: &[(BoolExpr<Symbolic>, bool)],
-) -> Result<(Bounds, Constraints), SolverError> {
+) -> Result<ExtractedBounds, SolverError> {
     let mut bounds = Bounds::new();
     let mut remaining = Vec::new();
+    let mut variables = Vec::new();
+
+    /// Add variable name to list if not already present
+    fn add_var(vars: &mut Vec<String>, name: &str) {
+        if !vars.iter().any(|v| v == name) {
+            vars.push(name.to_string());
+        }
+    }
 
     for (expr, taken) in constraints {
         // If contains ite, we can't extract bounds but can still evaluate
         if bool_contains_ite(expr) {
+            // For ite expressions, collect variables by traversal
+            expr.collect_variables(&mut variables);
             remaining.push((expr.clone(), *taken));
             continue;
         }
@@ -146,107 +165,86 @@ pub fn extract_bounds(
             BoolExpr::Lit(_) => {
                 // Literal constraints don't affect bounds
             }
-            BoolExpr::Le(l, r) => {
-                // l <= r
-                // If l is "x + offset" and r is literal: x + offset <= n → x <= n - offset
-                // If r is "x + offset" and l is literal: n <= x + offset → x >= n - offset
+            BoolExpr::Le(l, r) | BoolExpr::Ge(l, r) | BoolExpr::Eq(l, r) => {
+                let is_le = matches!(expr, BoolExpr::Le(_, _));
+                let is_ge = matches!(expr, BoolExpr::Ge(_, _));
+
                 match (as_single_var(l), as_single_var(r)) {
                     (Some((var, offset)), None) if matches!(r.as_ref(), Expr::Lit(_)) => {
                         let Expr::Lit(n) = r.as_ref() else {
                             unreachable!()
                         };
+                        add_var(&mut variables, var);
                         let bound = bounds.entry(var.to_string()).or_default();
-                        if *taken {
-                            // x + offset <= n → x <= n - offset
-                            bound.add_upper(n - offset);
+                        if is_le {
+                            if *taken {
+                                bound.add_upper(n - offset);
+                            } else {
+                                bound.add_lower(n - offset + 1);
+                            }
+                        } else if is_ge {
+                            if *taken {
+                                bound.add_lower(n - offset);
+                            } else {
+                                bound.add_upper(n - offset - 1);
+                            }
                         } else {
-                            // x + offset > n → x > n - offset → x >= n - offset + 1
-                            bound.add_lower(n - offset + 1);
+                            // Eq
+                            if *taken {
+                                let val = n - offset;
+                                bound.add_lower(val);
+                                bound.add_upper(val);
+                            } else {
+                                bound.add_excluded(n - offset);
+                            }
                         }
                     }
                     (None, Some((var, offset))) if matches!(l.as_ref(), Expr::Lit(_)) => {
                         let Expr::Lit(n) = l.as_ref() else {
                             unreachable!()
                         };
+                        add_var(&mut variables, var);
                         let bound = bounds.entry(var.to_string()).or_default();
-                        if *taken {
-                            // n <= x + offset → x >= n - offset
-                            bound.add_lower(n - offset);
+                        if is_le {
+                            if *taken {
+                                bound.add_lower(n - offset);
+                            } else {
+                                bound.add_upper(n - offset - 1);
+                            }
+                        } else if is_ge {
+                            if *taken {
+                                bound.add_upper(n - offset);
+                            } else {
+                                bound.add_lower(n - offset + 1);
+                            }
                         } else {
-                            // n > x + offset → x < n - offset → x <= n - offset - 1
-                            bound.add_upper(n - offset - 1);
+                            // Eq
+                            if *taken {
+                                let val = n - offset;
+                                bound.add_lower(val);
+                                bound.add_upper(val);
+                            } else {
+                                bound.add_excluded(n - offset);
+                            }
                         }
                     }
-                    _ => {
-                        remaining.push((expr.clone(), *taken));
-                    }
-                }
-            }
-            BoolExpr::Ge(l, r) => {
-                // l >= r is equivalent to r <= l
-                match (as_single_var(l), as_single_var(r)) {
-                    (Some((var, offset)), None) if matches!(r.as_ref(), Expr::Lit(_)) => {
-                        let Expr::Lit(n) = r.as_ref() else {
-                            unreachable!()
-                        };
-                        let bound = bounds.entry(var.to_string()).or_default();
-                        if *taken {
-                            // x + offset >= n → x >= n - offset
-                            bound.add_lower(n - offset);
-                        } else {
-                            // x + offset < n → x < n - offset → x <= n - offset - 1
-                            bound.add_upper(n - offset - 1);
+                    (lvar, rvar) => {
+                        // Complex constraint: collect variables and add to remaining
+                        match (lvar, rvar) {
+                            (Some((v1, _)), Some((v2, _))) => {
+                                add_var(&mut variables, v1);
+                                add_var(&mut variables, v2);
+                            }
+                            (Some((v, _)), None) | (None, Some((v, _))) => {
+                                add_var(&mut variables, v);
+                                // The other side is complex - collect from the expression
+                                expr.collect_variables(&mut variables);
+                            }
+                            (None, None) => {
+                                // Both sides are complex - collect from the expression
+                                expr.collect_variables(&mut variables);
+                            }
                         }
-                    }
-                    (None, Some((var, offset))) if matches!(l.as_ref(), Expr::Lit(_)) => {
-                        let Expr::Lit(n) = l.as_ref() else {
-                            unreachable!()
-                        };
-                        let bound = bounds.entry(var.to_string()).or_default();
-                        if *taken {
-                            // n >= x + offset → x <= n - offset
-                            bound.add_upper(n - offset);
-                        } else {
-                            // n < x + offset → x > n - offset → x >= n - offset + 1
-                            bound.add_lower(n - offset + 1);
-                        }
-                    }
-                    _ => {
-                        remaining.push((expr.clone(), *taken));
-                    }
-                }
-            }
-            BoolExpr::Eq(l, r) => {
-                match (as_single_var(l), as_single_var(r)) {
-                    (Some((var, offset)), None) if matches!(r.as_ref(), Expr::Lit(_)) => {
-                        let Expr::Lit(n) = r.as_ref() else {
-                            unreachable!()
-                        };
-                        let bound = bounds.entry(var.to_string()).or_default();
-                        if *taken {
-                            // x + offset == n → x == n - offset
-                            let val = n - offset;
-                            bound.add_lower(val);
-                            bound.add_upper(val);
-                        } else {
-                            // x + offset != n → x != n - offset
-                            bound.add_excluded(n - offset);
-                        }
-                    }
-                    (None, Some((var, offset))) if matches!(l.as_ref(), Expr::Lit(_)) => {
-                        let Expr::Lit(n) = l.as_ref() else {
-                            unreachable!()
-                        };
-                        let bound = bounds.entry(var.to_string()).or_default();
-                        if *taken {
-                            let val = n - offset;
-                            bound.add_lower(val);
-                            bound.add_upper(val);
-                        } else {
-                            bound.add_excluded(n - offset);
-                        }
-                    }
-                    _ => {
                         remaining.push((expr.clone(), *taken));
                     }
                 }
@@ -261,7 +259,11 @@ pub fn extract_bounds(
         }
     }
 
-    Ok((bounds, remaining))
+    Ok(ExtractedBounds {
+        bounds,
+        remaining,
+        variables,
+    })
 }
 
 /// Solver for constraint satisfaction with random sampling
@@ -320,19 +322,15 @@ impl<R: rand::Rng> Solver<R> {
         constraints: &[(BoolExpr<Symbolic>, bool)],
         subst: &Subst,
     ) -> Result<Env, SolverError> {
-        let (bounds, remaining) = extract_bounds(constraints)?;
+        let extracted = extract_bounds(constraints)?;
 
-        // Collect all variable names from constraints (excluding let-defined variables)
-        let mut variables: Vec<String> = bounds.keys().cloned().collect();
-        for (expr, _) in &remaining {
-            collect_variables_bool(expr, &mut variables);
-        }
         // Remove let-defined variables (they are computed, not sampled)
+        let mut variables = extracted.variables;
         variables.retain(|v| !subst.contains_key(v));
         variables.sort();
         variables.dedup();
 
-        self.sample(&bounds, &remaining, &variables)
+        self.sample(&extracted.bounds, &extracted.remaining, &variables)
     }
 
     /// Solve constraints without let expansion (for testing)
@@ -423,78 +421,6 @@ fn eval_symbolic_bool(expr: &BoolExpr<Symbolic>, env: &Env) -> bool {
         BoolExpr::Le(l, r) => eval_symbolic(l, env) <= eval_symbolic(r, env),
         BoolExpr::Ge(l, r) => eval_symbolic(l, env) >= eval_symbolic(r, env),
         BoolExpr::Eq(l, r) => eval_symbolic(l, env) == eval_symbolic(r, env),
-    }
-}
-
-/// Collect variable names from Ast expression
-fn collect_variables_ast(expr: &Expr<Ast>, vars: &mut Vec<String>) {
-    match expr {
-        Expr::Lit(_) => {}
-        Expr::Var(name) => {
-            if !vars.contains(name) {
-                vars.push(name.clone());
-            }
-        }
-        Expr::Add(l, r) | Expr::Sub(l, r) => {
-            collect_variables_ast(l, vars);
-            collect_variables_ast(r, vars);
-        }
-        Expr::If(cond, branches) => {
-            collect_variables_ast_bool(cond, vars);
-            collect_variables_ast(&branches.then_, vars);
-            collect_variables_ast(&branches.else_, vars);
-        }
-    }
-}
-
-/// Collect variable names from Ast boolean expression
-fn collect_variables_ast_bool(expr: &BoolExpr<Ast>, vars: &mut Vec<String>) {
-    match expr {
-        BoolExpr::Lit(_) => {}
-        BoolExpr::Le(l, r) | BoolExpr::Ge(l, r) | BoolExpr::Eq(l, r) => {
-            collect_variables_ast(l, vars);
-            collect_variables_ast(r, vars);
-        }
-    }
-}
-
-/// Collect variable names from expression
-fn collect_variables(expr: &Expr<Symbolic>, vars: &mut Vec<String>) {
-    match expr {
-        Expr::Lit(_) => {}
-        Expr::Var(ssa_var) => {
-            if !vars.contains(&ssa_var.name) {
-                vars.push(ssa_var.name.clone());
-            }
-        }
-        Expr::Add(l, r) | Expr::Sub(l, r) => {
-            collect_variables(l, vars);
-            collect_variables(r, vars);
-        }
-        Expr::If(cond, branches) => {
-            collect_variables_bool(cond, vars);
-            match branches {
-                SymIfBranches::ThenTaken { then_, else_ } => {
-                    collect_variables(then_, vars);
-                    collect_variables_ast(else_, vars);
-                }
-                SymIfBranches::ElseTaken { then_, else_ } => {
-                    collect_variables_ast(then_, vars);
-                    collect_variables(else_, vars);
-                }
-            }
-        }
-    }
-}
-
-/// Collect variable names from boolean expression
-fn collect_variables_bool(expr: &BoolExpr<Symbolic>, vars: &mut Vec<String>) {
-    match expr {
-        BoolExpr::Lit(_) => {}
-        BoolExpr::Le(l, r) | BoolExpr::Ge(l, r) | BoolExpr::Eq(l, r) => {
-            collect_variables(l, vars);
-            collect_variables(r, vars);
-        }
     }
 }
 
@@ -612,6 +538,7 @@ pub fn negate_at(
 mod tests {
     use super::*;
     use crate::state::exec;
+    use crate::Ast;
 
     /// Convert Ast expression to Symbolic using version 0 for all variables (test helper)
     fn ast_to_symbolic(expr: &Expr<Ast>) -> Expr<Symbolic> {
@@ -680,69 +607,73 @@ mod tests {
     #[test]
     fn extract_simple_le() {
         let constraints = vec![(parse_symbolic_bool("x <= 5"), true)];
-        let (bounds, remaining) = extract_bounds(&constraints).unwrap();
+        let extracted = extract_bounds(&constraints).unwrap();
 
-        assert!(remaining.is_empty());
-        assert_eq!(bounds["x"].upper, Some(5));
-        assert_eq!(bounds["x"].lower, None);
+        assert!(extracted.remaining.is_empty());
+        assert_eq!(extracted.bounds["x"].upper, Some(5));
+        assert_eq!(extracted.bounds["x"].lower, None);
+        assert_eq!(extracted.variables, vec!["x"]);
     }
 
     #[test]
     fn extract_le_negated() {
         let constraints = vec![(parse_symbolic_bool("x <= 5"), false)];
-        let (bounds, remaining) = extract_bounds(&constraints).unwrap();
+        let extracted = extract_bounds(&constraints).unwrap();
 
-        assert!(remaining.is_empty());
+        assert!(extracted.remaining.is_empty());
         // x > 5 → x >= 6
-        assert_eq!(bounds["x"].lower, Some(6));
-        assert_eq!(bounds["x"].upper, None);
+        assert_eq!(extracted.bounds["x"].lower, Some(6));
+        assert_eq!(extracted.bounds["x"].upper, None);
     }
 
     #[test]
     fn extract_with_offset() {
         // x + 1 <= 5 → x <= 4
         let constraints = vec![(parse_symbolic_bool("x + 1 <= 5"), true)];
-        let (bounds, remaining) = extract_bounds(&constraints).unwrap();
+        let extracted = extract_bounds(&constraints).unwrap();
 
-        assert!(remaining.is_empty());
-        assert_eq!(bounds["x"].upper, Some(4));
+        assert!(extracted.remaining.is_empty());
+        assert_eq!(extracted.bounds["x"].upper, Some(4));
     }
 
     #[test]
     fn extract_eq() {
         let constraints = vec![(parse_symbolic_bool("x == 5"), true)];
-        let (bounds, remaining) = extract_bounds(&constraints).unwrap();
+        let extracted = extract_bounds(&constraints).unwrap();
 
-        assert!(remaining.is_empty());
-        assert_eq!(bounds["x"].lower, Some(5));
-        assert_eq!(bounds["x"].upper, Some(5));
+        assert!(extracted.remaining.is_empty());
+        assert_eq!(extracted.bounds["x"].lower, Some(5));
+        assert_eq!(extracted.bounds["x"].upper, Some(5));
     }
 
     #[test]
     fn extract_neq() {
         let constraints = vec![(parse_symbolic_bool("x == 5"), false)];
-        let (bounds, remaining) = extract_bounds(&constraints).unwrap();
+        let extracted = extract_bounds(&constraints).unwrap();
 
-        assert!(remaining.is_empty());
-        assert_eq!(bounds["x"].excluded, vec![5]);
+        assert!(extracted.remaining.is_empty());
+        assert_eq!(extracted.bounds["x"].excluded, vec![5]);
     }
 
     #[test]
     fn extract_two_var_goes_to_remaining() {
         let constraints = vec![(parse_symbolic_bool("x <= y"), true)];
-        let (bounds, remaining) = extract_bounds(&constraints).unwrap();
+        let extracted = extract_bounds(&constraints).unwrap();
 
-        assert!(bounds.is_empty());
-        assert_eq!(remaining.len(), 1);
+        assert!(extracted.bounds.is_empty());
+        assert_eq!(extracted.remaining.len(), 1);
+        assert!(extracted.variables.contains(&"x".to_string()));
+        assert!(extracted.variables.contains(&"y".to_string()));
     }
 
     #[test]
     fn ite_goes_to_remaining() {
         let constraints = vec![(parse_symbolic_bool("(if x <= 5 then x else 0) <= 3"), true)];
 
-        let (bounds, remaining) = extract_bounds(&constraints).unwrap();
-        assert!(bounds.is_empty());
-        assert_eq!(remaining.len(), 1);
+        let extracted = extract_bounds(&constraints).unwrap();
+        assert!(extracted.bounds.is_empty());
+        assert_eq!(extracted.remaining.len(), 1);
+        assert!(extracted.variables.contains(&"x".to_string()));
     }
 
     #[test]
