@@ -660,7 +660,7 @@ mod tests {
         let expr = parse_expr("if x <= 5 then x + 1 else 0").unwrap();
 
         let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
-        let _ = state.eval(&expr);
+        state.eval(&expr).unwrap();
 
         // Should have path constraint: x <= 5 : true
         assert_eq!(state.path_constraints.len(), 1);

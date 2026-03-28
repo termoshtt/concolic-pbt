@@ -135,12 +135,10 @@ impl<R: rand::Rng> Explorer<R> {
             if let Ok(new_env) = self.solver.solve(&constraints) {
                 // Verify the counterexample (solver might give approximate solution)
                 let mut new_state = ConcolicState::new(new_env.clone());
-                if new_state.exec_stmts(stmts).is_err() {
+                if let Err(failure) = new_state.exec_stmts(stmts) {
                     return ExploreResult::Counterexample {
                         env: new_env,
-                        failure: OracleFailure::AssertionFailed {
-                            expr: (*assertion).clone(),
-                        },
+                        failure,
                     };
                 }
                 // Solver gave input that doesn't actually violate assertion; continue

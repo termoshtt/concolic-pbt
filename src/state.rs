@@ -164,7 +164,10 @@ impl ConcolicState {
     pub fn eval_bool(&mut self, expr: &BoolExpr) -> Result<bool, OracleFailure> {
         let result = self.eval_assert(expr)?;
         if !matches!(expr, BoolExpr::Lit(_)) {
-            self.path_constraints.push((expr.clone(), result));
+            // Record the SSA-converted condition so that path constraints
+            // are consistent with SSA let constraints and shadowing semantics.
+            let ssa_expr = self.to_ssa_bool_expr(expr);
+            self.path_constraints.push((ssa_expr, result));
         }
         Ok(result)
     }
