@@ -625,9 +625,7 @@ mod tests {
                 Expr::Sub(Box::new(ast_to_symbolic(l)), Box::new(ast_to_symbolic(r)))
             }
             Expr::If(cond, branches) => {
-                // For test purposes, convert both branches to Symbolic
-                // (representing a "fully evaluated" ite, which isn't realistic
-                // but works for testing the solver)
+                // Pretend we took the then branch for test purposes
                 Expr::If(
                     Box::new(ast_to_symbolic_bool(cond)),
                     SymIfBranches::ThenTaken {
