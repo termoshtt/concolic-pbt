@@ -5,6 +5,7 @@ mod node;
 mod parser;
 mod solver;
 mod state;
+pub mod tensor;
 
 pub use explore::{ExploreResult, Explorer};
 pub use node::{BoolExpr, Env, Expr, Stmt, Stmts};
