@@ -85,6 +85,9 @@ impl Bound {
 /// Collection of bounds for all variables
 pub type Bounds = HashMap<String, Bound>;
 
+/// Path constraints: list of (condition, taken_direction) pairs
+pub type Constraints = Vec<(BoolExpr<Symbolic>, bool)>;
+
 /// Check if expression contains ite
 fn contains_ite(expr: &Expr<Symbolic>) -> bool {
     match expr {
@@ -128,7 +131,7 @@ fn as_single_var(expr: &Expr<Symbolic>) -> Option<(&str, i64)> {
 /// are those that couldn't be converted to simple bounds.
 pub fn extract_bounds(
     constraints: &[(BoolExpr<Symbolic>, bool)],
-) -> Result<(Bounds, Vec<(BoolExpr<Symbolic>, bool)>), SolverError> {
+) -> Result<(Bounds, Constraints), SolverError> {
     let mut bounds = Bounds::new();
     let mut remaining = Vec::new();
 

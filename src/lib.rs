@@ -11,5 +11,5 @@ pub use node::{
     Ast, AstIfBranches, BoolExpr, Env, Expr, SsaVar, Stage, Stmt, Stmts, SymIfBranches, Symbolic,
 };
 pub use parser::{parse_bool_expr, parse_expr, parse_stmts};
-pub use solver::{Bound, Bounds, Solver, SolverError, extract_bounds, negate_at};
+pub use solver::{Bound, Bounds, Constraints, Solver, SolverError, extract_bounds, negate_at};
 pub use state::{exec, ExecutionTrace, OracleFailure};
