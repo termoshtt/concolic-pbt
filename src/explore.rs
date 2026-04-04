@@ -1,6 +1,7 @@
 use std::fmt;
 
-use crate::{BoolExpr, ConcolicState, Env, OracleFailure, Solver, Stmt, Stmts};
+use crate::state::exec;
+use crate::{Env, OracleFailure, Solver, Stmts};
 
 /// Result of exploration
 #[derive(Debug, Clone, PartialEq)]
@@ -74,19 +75,18 @@ impl<R: rand::Rng> Explorer<R> {
         }
         self.iterations += 1;
 
-        // Execute statements with current env, collecting path constraints
-        let mut state = ConcolicState::new(env.clone());
-        let result = state.exec_stmts(stmts);
+        // Execute statements with current env, collecting execution trace
+        let trace = exec(stmts, env.clone());
 
         // Extract current path
-        let path: Path = state
+        let path: Path = trace
             .path_constraints
             .iter()
             .map(|(_, taken)| *taken)
             .collect();
 
         // Check if assertion failed
-        if let Err(failure) = result {
+        if let Err(failure) = trace.result {
             return ExploreResult::Counterexample { env, failure };
         }
 
@@ -105,22 +105,13 @@ impl<R: rand::Rng> Explorer<R> {
         //    Solve: path_constraints AND let_constraints AND NOT(assertion)
         // 2. If that fails, try alternative paths by negating branch conditions
 
-        // Collect all assertions from the statements
-        let assertions: Vec<&BoolExpr> = stmts
-            .0
-            .iter()
-            .filter_map(|s| match s {
-                Stmt::Assert { expr } => Some(expr),
-                Stmt::Let { .. } => None,
-            })
-            .collect();
-
         // Step 1: Try to find counterexample on this path by negating each assertion
-        for assertion in &assertions {
-            if let Ok(new_env) = self.solver.find_counterexample(&state, assertion) {
+        // (passed_asserts contains assertions in SSA form)
+        for ssa_assertion in &trace.passed_asserts {
+            if let Ok(new_env) = self.solver.find_counterexample(&trace, ssa_assertion) {
                 // Verify the counterexample (solver might give approximate solution)
-                let mut new_state = ConcolicState::new(new_env.clone());
-                if let Err(failure) = new_state.exec_stmts(stmts) {
+                let new_trace = exec(stmts, new_env.clone());
+                if let Err(failure) = new_trace.result {
                     return ExploreResult::Counterexample {
                         env: new_env,
                         failure,
@@ -132,9 +123,9 @@ impl<R: rand::Rng> Explorer<R> {
 
         // Step 2: Try alternative paths (depth-first: start from last constraint)
         // Only negate constraints at index >= min_index (earlier ones are handled by parent)
-        for i in (min_index..state.path_constraints.len()).rev() {
+        for i in (min_index..trace.path_constraints.len()).rev() {
             // Try to find an input for the alternative path
-            match self.solver.find_alternative(&state, i) {
+            match self.solver.find_alternative(&trace, i) {
                 Ok(new_env) => {
                     // Recurse with i+1 as the new min_index
                     // Child should not negate constraints at or before index i
@@ -198,7 +189,7 @@ impl<R> fmt::Display for Explorer<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse_bool_expr;
+    use crate::{Stmt, parse_bool_expr};
     use rand::SeedableRng;
     use std::collections::HashMap;
 

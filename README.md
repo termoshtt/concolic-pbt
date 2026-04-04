@@ -50,16 +50,16 @@ let expr = parse_expr("if x <= 5 then x + 1 else x - 1").unwrap();
 
 ### Concolic Execution
 
-`ConcolicState` evaluates expressions while collecting path constraints:
+`exec` evaluates statements while collecting path constraints, returning an `ExecutionTrace`:
 
 ```rust
-use concolic_pbt::{parse_expr, ConcolicState};
+use concolic_pbt::{parse_stmts, exec};
 use std::collections::HashMap;
 
-let expr = parse_expr("if x <= 5 then x + 1 else x - 1").unwrap();
-let mut state = ConcolicState::new(HashMap::from([("x".to_string(), 3)]));
-let result = state.eval(&expr);  // Returns 4
-// state.constraints now contains: [(x <= 5, true)]
+let stmts = parse_stmts("let y = if x <= 5 then x + 1 else x - 1").unwrap();
+let trace = exec(&stmts, HashMap::from([("x".to_string(), 3)]));
+// trace.env["y"] == 4
+// trace.path_constraints contains: [(x@0 <= 5, true)]
 ```
 
 ### Constraint Solver

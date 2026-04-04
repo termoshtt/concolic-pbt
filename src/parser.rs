@@ -134,9 +134,7 @@ fn expr_parser<'a>() -> impl Parser<'a, &'a str, Expr, extra::Err<Rich<'a, char>
             .then(expr.clone())
             .then_ignore(text::keyword("else").padded())
             .then(expr)
-            .map(|((cond, then_), else_)| {
-                Expr::If(Box::new(cond), Box::new(then_), Box::new(else_))
-            });
+            .map(|((cond, then_), else_)| Expr::if_(cond, then_, else_));
 
         if_expr.or(arith)
     })
@@ -299,38 +297,23 @@ mod tests {
     #[test]
     fn parse_if_expr() {
         let result = parse_expr("if x <= 5 then 1 else 0").unwrap();
+        let x = Expr::var("x");
         assert_eq!(
             result,
-            Expr::If(
-                Box::new(BoolExpr::Le(
-                    Box::new(Expr::Var("x".to_string())),
-                    Box::new(Expr::Lit(5))
-                )),
-                Box::new(Expr::Lit(1)),
-                Box::new(Expr::Lit(0))
-            )
+            Expr::if_(x.le(Expr::lit(5)), Expr::lit(1), Expr::lit(0))
         );
     }
 
     #[test]
     fn parse_nested_if() {
         let result = parse_expr("if x <= 5 then if x >= 0 then x else 0 else 10").unwrap();
+        let x = || Expr::var("x");
         assert_eq!(
             result,
-            Expr::If(
-                Box::new(BoolExpr::Le(
-                    Box::new(Expr::Var("x".to_string())),
-                    Box::new(Expr::Lit(5))
-                )),
-                Box::new(Expr::If(
-                    Box::new(BoolExpr::Ge(
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Lit(0))
-                    )),
-                    Box::new(Expr::Var("x".to_string())),
-                    Box::new(Expr::Lit(0))
-                )),
-                Box::new(Expr::Lit(10))
+            Expr::if_(
+                x().le(Expr::lit(5)),
+                Expr::if_(x().ge(Expr::lit(0)), x(), Expr::lit(0)),
+                Expr::lit(10)
             )
         );
     }
@@ -338,21 +321,13 @@ mod tests {
     #[test]
     fn parse_complex_expr() {
         let result = parse_expr("if x + 1 <= 10 then x - 1 else 0").unwrap();
+        let x = || Expr::var("x");
         assert_eq!(
             result,
-            Expr::If(
-                Box::new(BoolExpr::Le(
-                    Box::new(Expr::Add(
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Lit(1))
-                    )),
-                    Box::new(Expr::Lit(10))
-                )),
-                Box::new(Expr::Sub(
-                    Box::new(Expr::Var("x".to_string())),
-                    Box::new(Expr::Lit(1))
-                )),
-                Box::new(Expr::Lit(0))
+            Expr::if_(
+                (x() + Expr::lit(1)).le(Expr::lit(10)),
+                x() - Expr::lit(1),
+                Expr::lit(0)
             )
         );
     }
@@ -361,19 +336,10 @@ mod tests {
     fn parse_bool_with_if_expr() {
         // (if x <= 5 then x else 10) <= 7
         let result = parse_bool_expr("(if x <= 5 then x else 10) <= 7").unwrap();
+        let x = || Expr::var("x");
         assert_eq!(
             result,
-            BoolExpr::Le(
-                Box::new(Expr::If(
-                    Box::new(BoolExpr::Le(
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Lit(5))
-                    )),
-                    Box::new(Expr::Var("x".to_string())),
-                    Box::new(Expr::Lit(10))
-                )),
-                Box::new(Expr::Lit(7))
-            )
+            Expr::if_(x().le(Expr::lit(5)), x(), Expr::lit(10)).le(Expr::lit(7))
         );
     }
 
@@ -428,21 +394,12 @@ mod tests {
     #[test]
     fn parse_let_with_if() {
         let result = parse_stmts("let y = if x >= 1 then x else x + 1").unwrap();
+        let x = || Expr::var("x");
         assert_eq!(
             result,
             Stmts(vec![Stmt::Let {
                 name: "y".to_string(),
-                expr: Expr::If(
-                    Box::new(BoolExpr::Ge(
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Lit(1))
-                    )),
-                    Box::new(Expr::Var("x".to_string())),
-                    Box::new(Expr::Add(
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::Lit(1))
-                    ))
-                )
+                expr: Expr::if_(x().ge(Expr::lit(1)), x(), x() + Expr::lit(1))
             }])
         );
     }
