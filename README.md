@@ -59,7 +59,7 @@ use std::collections::HashMap;
 let stmts = parse_stmts("let y = if x <= 5 then x + 1 else x - 1").unwrap();
 let trace = exec(&stmts, HashMap::from([("x".to_string(), 3)]));
 // trace.env["y"] == 4
-// trace.path_constraints contains: [(x <= 5, true)]
+// trace.path_constraints contains: [(x@0 <= 5, true)]
 ```
 
 ### Constraint Solver

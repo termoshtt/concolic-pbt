@@ -32,7 +32,7 @@ pub enum OracleFailure {
 /// Result of executing a sequence of statements (immutable)
 #[derive(Debug, Clone)]
 pub struct ExecutionTrace {
-    /// Input environment
+    /// Final environment after execution (includes let-bound variables)
     pub env: Env,
     /// Collected path constraints (with the branch direction taken)
     pub path_constraints: Vec<(BoolExpr<Symbolic>, bool)>,
@@ -83,12 +83,15 @@ pub(crate) struct ConcolicState {
 
 impl ConcolicState {
     pub fn new(env: Env) -> Self {
+        // Initialize versions to 1 for input variables.
+        // This ensures input variables are @0, and the first let assignment becomes @1.
+        let versions = env.keys().map(|k| (k.clone(), 1)).collect();
         Self {
             env,
             path_constraints: Vec::new(),
             let_constraints: Vec::new(),
             passed_asserts: Vec::new(),
-            versions: std::collections::HashMap::new(),
+            versions,
         }
     }
 
@@ -640,8 +643,8 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 7
         Let constraints:
-          x@0 = x@0 + 1
           x@1 = x@0 + 1
+          x@2 = x@1 + 1
         Path constraints:
         "###);
     }
