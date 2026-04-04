@@ -753,4 +753,60 @@ mod tests {
             assert!(env["x"] <= 5, "x = {} should be <= 5", env["x"]);
         }
     }
+
+    #[test]
+    fn let_defined_var_in_non_evaluated_branch() {
+        use std::collections::HashMap;
+
+        // let y = x + 1; let z = if x <= 5 then 0 else y
+        // With x = 3, we take the then branch, else_ (containing y) is Ast
+        // When finding alternative (x > 5), we need to evaluate y in the else branch
+        let stmts =
+            crate::parse_stmts("let y = x + 1; let z = if x <= 5 then 0 else y").unwrap();
+        let trace = exec(&stmts, HashMap::from([("x".to_string(), 3)]));
+
+        // Should have path constraint: x <= 5 : true
+        assert_eq!(trace.path_constraints.len(), 1);
+        assert!(trace.path_constraints[0].1);
+
+        // Find alternative (negate the constraint to get x > 5)
+        let mut solver = Solver::new(rand::rng(), 100);
+        let alt_env = solver.find_alternative(&trace, 0).unwrap();
+
+        // Should find x > 5
+        assert!(alt_env["x"] > 5, "x = {} should be > 5", alt_env["x"]);
+
+        // Verify: re-execute with alternative input
+        let new_trace = exec(&stmts, alt_env.clone());
+        // Now we should take the else branch
+        assert!(!new_trace.path_constraints[0].1);
+        // z = y = x + 1
+        assert_eq!(new_trace.env["z"], alt_env["x"] + 1);
+    }
+
+    #[test]
+    fn assert_with_ite_containing_let_var() {
+        use std::collections::HashMap;
+
+        // let y = x + 1; assert((if x <= 5 then y else 10) <= 7)
+        // With x = 3, y = 4, condition is true, assertion checks y <= 7, passes
+        // To find counterexample: need (if x <= 5 then y else 10) > 7
+        // This requires x <= 5 AND y > 7, i.e., x <= 5 AND x + 1 > 7, i.e., x <= 5 AND x > 6
+        // This is unsatisfiable, so no counterexample on this path
+        let stmts =
+            crate::parse_stmts("let y = x + 1; assert((if x <= 5 then y else 10) <= 7)").unwrap();
+        let trace = exec(&stmts, HashMap::from([("x".to_string(), 3)]));
+
+        // Assertion passed
+        assert!(trace.result.is_ok());
+        assert_eq!(trace.passed_asserts.len(), 1);
+
+        // Try to find counterexample
+        let mut solver = Solver::new(rand::rng(), 100);
+        let result = solver.find_counterexample(&trace, &trace.passed_asserts[0]);
+
+        // Should fail to find counterexample (constraints are unsatisfiable)
+        // x <= 5 AND x + 1 > 7 → x <= 5 AND x > 6 → impossible
+        assert!(result.is_err());
+    }
 }
