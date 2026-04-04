@@ -761,8 +761,7 @@ mod tests {
         // let y = x + 1; let z = if x <= 5 then 0 else y
         // With x = 3, we take the then branch, else_ (containing y) is Ast
         // When finding alternative (x > 5), we need to evaluate y in the else branch
-        let stmts =
-            crate::parse_stmts("let y = x + 1; let z = if x <= 5 then 0 else y").unwrap();
+        let stmts = crate::parse_stmts("let y = x + 1; let z = if x <= 5 then 0 else y").unwrap();
         let trace = exec(&stmts, HashMap::from([("x".to_string(), 3)]));
 
         // Should have path constraint: x <= 5 : true
