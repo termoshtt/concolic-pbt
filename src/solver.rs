@@ -537,8 +537,8 @@ pub fn negate_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::exec;
     use crate::Ast;
+    use crate::state::exec;
 
     /// Convert Ast expression to Symbolic using version 0 for all variables (test helper)
     fn ast_to_symbolic(expr: &Expr<Ast>) -> Expr<Symbolic> {
