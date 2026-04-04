@@ -28,6 +28,11 @@ A minimal expression language with:
 #### Grammar
 
 ```text
+stmts      := stmt (';' stmt)*
+stmt       := assert_stmt | let_stmt
+assert_stmt := "assert" '(' bool_expr ')'
+let_stmt   := "let" var '=' expr
+
 expr       := if_expr | arith_expr
 if_expr    := "if" bool_expr "then" expr "else" expr
 arith_expr := term (('+' | '-') term)*
@@ -43,9 +48,9 @@ number     := '-'? [0-9]+
 #### Example
 
 ```rust
-use concolic_pbt::parse_expr;
+use concolic_pbt::parse_stmts;
 
-let expr = parse_expr("if x <= 5 then x + 1 else x - 1").unwrap();
+let stmts = parse_stmts("let y = x + 1; assert(y <= 10)").unwrap();
 ```
 
 ### Concolic Execution
