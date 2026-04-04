@@ -540,11 +540,11 @@ mod tests {
     use crate::Ast;
     use crate::state::exec;
 
-    /// Convert Ast expression to Symbolic using version 0 for all variables (test helper)
+    /// Convert Ast expression to Symbolic using Input version for all variables (test helper)
     fn ast_to_symbolic(expr: &Expr<Ast>) -> Expr<Symbolic> {
         match expr {
             Expr::Lit(n) => Expr::Lit(*n),
-            Expr::Var(name) => Expr::Var(SsaVar::new(name, 0)),
+            Expr::Var(name) => Expr::Var(SsaVar::input(name)),
             Expr::Add(l, r) => {
                 Expr::Add(Box::new(ast_to_symbolic(l)), Box::new(ast_to_symbolic(r)))
             }

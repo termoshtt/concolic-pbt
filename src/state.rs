@@ -83,9 +83,9 @@ pub(crate) struct ConcolicState {
 
 impl ConcolicState {
     pub fn new(env: Env) -> Self {
-        // Initialize versions to 1 for input variables.
-        // This ensures input variables are @0, and the first let assignment becomes @1.
-        let versions = env.keys().map(|k| (k.clone(), 1)).collect();
+        // Initialize version counts to 0 for input variables.
+        // count=0 means "Input" (not yet defined by let), count>=1 means "Defined(count)"
+        let versions = env.keys().map(|k| (k.clone(), 0)).collect();
         Self {
             env,
             path_constraints: Vec::new(),
@@ -95,22 +95,18 @@ impl ConcolicState {
         }
     }
 
-    /// Allocate a new version for a variable and return it
-    fn next_version(&mut self, name: &str) -> usize {
-        let version = self.versions.entry(name.to_string()).or_insert(0);
-        let current = *version;
-        *version += 1;
-        current
+    /// Allocate a new version for a variable and return the SsaVar
+    fn next_ssa_var(&mut self, name: &str) -> SsaVar {
+        let count = self.versions.entry(name.to_string()).or_insert(0);
+        *count += 1;
+        SsaVar::defined(name, *count)
     }
 
     /// Get the current SSA variable for a name
     fn current_ssa_var(&self, name: &str) -> SsaVar {
-        if let Some(&version) = self.versions.get(name) {
-            // Use version - 1 because versions points to the next version
-            SsaVar::new(name, version - 1)
-        } else {
-            // Input variable: use version 0
-            SsaVar::new(name, 0)
+        match self.versions.get(name) {
+            Some(&count) if count > 0 => SsaVar::defined(name, count),
+            _ => SsaVar::input(name),
         }
     }
 
@@ -246,11 +242,9 @@ impl ConcolicState {
                 // Evaluate the expression (also returns SSA form)
                 let (value, ssa_expr) = self.eval(expr)?;
                 self.env.insert(name.clone(), value);
-                // Allocate new version for this variable
-                let version = self.next_version(name);
-                // Record the constraint for the solver (name@version == ssa_expr)
-                self.let_constraints
-                    .push((SsaVar::new(name.clone(), version), ssa_expr));
+                // Allocate new version for this variable and record constraint
+                let ssa_var = self.next_ssa_var(name);
+                self.let_constraints.push((ssa_var, ssa_expr));
                 Ok(())
             }
         }
@@ -532,7 +526,7 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 5, y = 6
         Let constraints:
-          y@0 = x@0 + 1
+          y@1 = x@0 + 1
         Path constraints:
         "###);
     }
@@ -547,7 +541,7 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 5, y = 5
         Let constraints:
-          y@0 = ite(x@0 >= 1, x@0, x + 1)
+          y@1 = ite(x@0 >= 1, x@0, x + 1)
         Path constraints:
           x@0 [=5] >= 1 : true
         "###);
@@ -562,7 +556,7 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 5, y = 6
         Let constraints:
-          y@0 = x@0 + 1
+          y@1 = x@0 + 1
         Path constraints:
         "###);
     }
@@ -627,8 +621,8 @@ mod tests {
         insta::assert_snapshot!(state, @r###"
         Env: x = 5, y = 7
         Let constraints:
-          y@0 = x@0 + 1
-          y@1 = y@0 + 1
+          y@1 = x@0 + 1
+          y@2 = y@1 + 1
         Path constraints:
         "###);
     }

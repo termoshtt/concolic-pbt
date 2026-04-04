@@ -67,18 +67,54 @@ impl fmt::Display for SymIfBranches {
     }
 }
 
+/// SSA version for a variable
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SsaVersion {
+    /// Input variable (provided in the initial environment)
+    Input,
+    /// Defined by let statement (n-th definition, 1-indexed)
+    Defined(std::num::NonZeroUsize),
+}
+
+impl SsaVersion {
+    /// Create a new Defined version
+    pub fn defined(n: usize) -> Self {
+        SsaVersion::Defined(
+            std::num::NonZeroUsize::new(n).expect("Defined version must be non-zero"),
+        )
+    }
+}
+
+impl fmt::Display for SsaVersion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SsaVersion::Input => write!(f, "0"),
+            SsaVersion::Defined(n) => write!(f, "{}", n),
+        }
+    }
+}
+
 /// SSA-style variable identifier: (name, version)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SsaVar {
     pub name: String,
-    pub version: usize,
+    pub version: SsaVersion,
 }
 
 impl SsaVar {
-    pub fn new(name: impl Into<String>, version: usize) -> Self {
+    /// Create an input variable (version 0)
+    pub fn input(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            version,
+            version: SsaVersion::Input,
+        }
+    }
+
+    /// Create a defined variable (version >= 1)
+    pub fn defined(name: impl Into<String>, n: usize) -> Self {
+        Self {
+            name: name.into(),
+            version: SsaVersion::defined(n),
         }
     }
 }

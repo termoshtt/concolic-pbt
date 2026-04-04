@@ -8,7 +8,8 @@ mod state;
 
 pub use explore::{ExploreResult, Explorer};
 pub use node::{
-    Ast, AstIfBranches, BoolExpr, Env, Expr, SsaVar, Stage, Stmt, Stmts, SymIfBranches, Symbolic,
+    Ast, AstIfBranches, BoolExpr, Env, Expr, SsaVar, SsaVersion, Stage, Stmt, Stmts, SymIfBranches,
+    Symbolic,
 };
 pub use parser::{parse_bool_expr, parse_expr, parse_stmts};
 pub use solver::{
