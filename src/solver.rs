@@ -295,7 +295,7 @@ impl<R: rand::Rng> Solver<R> {
         let constraints = negate_at(&trace.path_constraints, index);
         let subst = Self::build_subst(&trace.let_constraints);
         let expanded = apply_substitution(&constraints, &subst);
-        self.solve(&expanded, &subst)
+        self.solve(&expanded)
     }
 
     /// Try to find an input that violates the given assertion (already in SSA form)
@@ -310,23 +310,17 @@ impl<R: rand::Rng> Solver<R> {
 
         let subst = Self::build_subst(&trace.let_constraints);
         let expanded = apply_substitution(&constraints, &subst);
-        self.solve(&expanded, &subst)
+        self.solve(&expanded)
     }
 
     /// Solve constraints and return a satisfying assignment
     ///
-    /// Takes already-expanded constraints (let variables substituted)
-    /// and the substitution map (to exclude let-defined variables from sampling).
-    fn solve(
-        &mut self,
-        constraints: &[(BoolExpr<Symbolic>, bool)],
-        subst: &Subst,
-    ) -> Result<Env, SolverError> {
+    /// Takes already-expanded constraints (let variables substituted).
+    /// After substitution, only input variables remain in the constraints.
+    fn solve(&mut self, constraints: &[(BoolExpr<Symbolic>, bool)]) -> Result<Env, SolverError> {
         let extracted = extract_bounds(constraints)?;
 
-        // Remove let-defined variables (they are computed, not sampled)
         let mut variables = extracted.variables;
-        variables.retain(|v| !subst.contains_key(v));
         variables.sort();
         variables.dedup();
 
@@ -339,7 +333,7 @@ impl<R: rand::Rng> Solver<R> {
         &mut self,
         constraints: &[(BoolExpr<Symbolic>, bool)],
     ) -> Result<Env, SolverError> {
-        self.solve(constraints, &Subst::new())
+        self.solve(constraints)
     }
 
     /// Sample an Env that satisfies bounds and remaining constraints
