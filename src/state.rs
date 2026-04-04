@@ -263,8 +263,15 @@ impl ConcolicState {
         match expr {
             Expr::Lit(n) => format!("{}", n),
             Expr::Var(ssa_var) => {
-                // Look up the concrete value using the base name
-                let val = self.env.get(&ssa_var.name).copied().unwrap_or(0);
+                // Look up the concrete value using the base name.
+                // This is only called after successful execution, so all variables
+                // in Expr<Symbolic> must be in env (otherwise eval would have
+                // returned UndefinedVariable error).
+                let val = self
+                    .env
+                    .get(&ssa_var.name)
+                    .copied()
+                    .expect("BUG: variable not in env after successful execution");
                 format!("{} [={}]", ssa_var, val)
             }
             Expr::Add(l, r) | Expr::Sub(l, r) => {
